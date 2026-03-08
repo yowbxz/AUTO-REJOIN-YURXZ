@@ -11,8 +11,8 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 
 # ── EDIT INI: GitHub repo kamu ───────────────────────
-GITHUB_USER="YURXZ"
-GITHUB_REPO="roblox-auto-rejoin"
+GITHUB_USER="yowbxz"
+GITHUB_REPO="AUTO-REJOIN-YURXZ"
 BRANCH="main"
 # ─────────────────────────────────────────────────────
 
