@@ -36,8 +36,7 @@ CONFIG_FILE = "config.json"
 #  HELPERS DASAR
 # ══════════════════════════════════════════════════════
 def clear_screen():
-    print("\033[H\033[2J", end="")
-    sys.stdout.flush()
+    os.system("clear")
 
 def print_header():
     print("\n" + "="*50)
@@ -541,7 +540,7 @@ def set_floating_window(pkg, ps_link, index, total, sw, sh):
 #  DRAW UI
 # ══════════════════════════════════════════════════════
 def draw_ui(accounts, sys_status, check_prog, next_wh=""):
-    sys.stdout.write("\033[2J\033[H\033[?25l")
+    sys.stdout.write("\033[2J\033[H\033[?25h")
     C_RES = "\033[0m"; C_CYA = "\033[36m"; C_GRE = "\033[32m"
     C_YEL = "\033[33m"; C_RED = "\033[31m"; C_GRY = "\033[90m"
     C_MGA = "\033[35m"
