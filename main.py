@@ -430,7 +430,12 @@ def save_refreshed_cookie(uid, new_cookie):
     except: pass
 
 def mute_roblox():
+    # Cara 1: media volume command
     run_root_cmd("media volume --stream 3 --set 0 2>/dev/null || true")
+    # Cara 2: service call audio (lebih kompatibel)
+    run_root_cmd("service call audio 3 i32 3 i32 0 i32 1 2>/dev/null || true")
+    # Cara 3: set via settings
+    run_root_cmd("settings put system volume_music 0 2>/dev/null || true")
     log_activity("Roblox muted")
 
 def set_low_graphics(pkg):
@@ -564,7 +569,9 @@ def start_rejoin_app():
         if acc['status'] == 'Launched (Wait)':
             time.sleep(3)
             if do_mute:   mute_roblox()
-            if do_lowgfx: set_low_graphics(pkg)
+            if do_lowgfx:
+                set_low_graphics(pkg)
+                set_low_resolution()
             protect_app(pkg)
             
         if i < tot - 1:
@@ -657,7 +664,9 @@ def start_rejoin_app():
                     open_ps_link(a['ps_link'], pkg, get_grid_bounds(a['index'], tot, sw, sh) if do_float else None)
                     time.sleep(5)
                     if do_mute:   mute_roblox()
-                    if do_lowgfx: set_low_graphics(pkg)
+                    if do_lowgfx:
+                        set_low_graphics(pkg)
+                        set_low_resolution()
                     protect_app(pkg)
                     
                     for t in range(25, 0, -1):
@@ -683,6 +692,7 @@ def start_rejoin_app():
         pass
     finally:
         sys.stdout.write("\033[?25h")
+        restore_resolution()
 
 def main():
     while True:
