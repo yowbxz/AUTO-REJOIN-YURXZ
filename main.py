@@ -68,25 +68,12 @@ def log_activity(msg, lvl="INFO"):
         pass
 
 def clean_input(prompt):
-    try:
-        subprocess.run(['stty', 'sane'], stderr=subprocess.DEVNULL)
-    except:
-        pass
     print("\033[?25h", end="")
     sys.stdout.flush()
-    print(prompt, end='')
-    sys.stdout.flush()
     try:
-        raw_val = input().strip()
+        return input(prompt).strip()
     except EOFError:
         return ""
-    chars = []
-    for c in raw_val:
-        if c == '\x7f' or c == '\x08':
-            if chars: chars.pop()
-        else:
-            chars.append(c)
-    return "".join(chars)
 
 # ══════════════════════════════════════════════════════
 #  CONFIG — CREATE & EDIT
