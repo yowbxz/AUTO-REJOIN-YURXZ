@@ -260,21 +260,6 @@ def get_current_resolution():
         if m: return int(m.group(1)), int(m.group(2))
     return w, h
 
-def get_grid_bounds(index, total, screen_w, screen_h):
-    cols = math.ceil(math.sqrt(total))
-    rows = math.ceil(total / cols)
-    if screen_w > screen_h:
-        while cols < rows:
-            cols += 1
-            rows = math.ceil(total / cols)
-    cell_w = screen_w // cols
-    cell_h = screen_h // rows
-    
-    idx = index - 1
-    r = idx // cols
-    c = idx % cols
-    return f"{c*cell_w},{r*cell_h},{(c+1)*cell_w},{(r+1)*cell_h}"
-
 def get_memory_info():
     try:
         with open("/proc/meminfo", "r") as f:
@@ -441,6 +426,47 @@ def unmute_roblox():
     run_root_cmd("appops set com.roblox.client PLAY_AUDIO allow 2>/dev/null || true")
     log_activity("Roblox unmuted")
 
+def set_roblox_min_settings():
+    """Auto tap untuk set grafik & volume Roblox ke minimum"""
+    time.sleep(8)  # tunggu Roblox fully loaded
+
+    # Buka settings Roblox via tap tombol hamburger menu (pojok kanan atas)
+    # Resolusi 720x1280
+    run_root_cmd("input tap 641 198")   # tap ikon menu/settings Roblox
+    time.sleep(1)
+    run_root_cmd("input tap 575 530")   # tap Pengaturan
+    time.sleep(1)
+
+    # Tap tab Kualitas Grafik
+    run_root_cmd("input tap 207 290")   # tap "Kualitas Grafik"
+    time.sleep(0.5)
+
+    # Set mode ke Manual dulu
+    run_root_cmd("input tap 283 970")   # tap "Manual"
+    time.sleep(0.5)
+
+    # Tap bawah slider grafik (mentok kiri/minimum)
+    run_root_cmd("input tap 210 1220")  # tap bagian bawah slider grafik
+    time.sleep(0.5)
+
+    # Tap tab Volume
+    run_root_cmd("input tap 480 275")   # tap "Volume"
+    time.sleep(0.5)
+
+    # Tap bawah slider volume (mentok kiri/minimum/mute)
+    run_root_cmd("input tap 480 1220")  # tap bagian bawah slider volume
+    time.sleep(0.5)
+
+    # Tap Mati di volume
+    run_root_cmd("input tap 352 970")   # tap "Mati"
+    time.sleep(0.5)
+
+    # Keluar dari settings - tap tombol back atau X
+    run_root_cmd("input tap 122 390")   # tap "Keluar"
+    time.sleep(0.5)
+
+    log_activity("Grafik & volume Roblox di-set ke minimum via auto tap")
+
 def set_low_graphics(pkg):
     pref = f"/data/data/{pkg}/shared_prefs"
     ok, files = run_root_cmd(f"ls {pref} 2>/dev/null")
@@ -544,7 +570,6 @@ def start_rejoin_app():
     interval      = config.get("check_interval", 35)
     restart_delay = config.get("restart_delay", 15)
     wh_url        = config.get("webhook_url", "")
-    do_float      = config.get("floating_window", True)
     do_mute       = config.get("auto_mute", True)
     do_lowgfx     = config.get("auto_low_graphics", True)
     
@@ -583,8 +608,7 @@ def start_rejoin_app():
 
         acc['status'] = 'Launching...'
         draw_ui(accounts, "Launching Accounts", f"[{i+1}/{tot}]")
-        bounds = get_grid_bounds(acc['index'], tot, sw, sh) if do_float else None
-        if open_ps_link(acc['ps_link'], pkg, bounds):
+        if open_ps_link(acc['ps_link'], pkg):
             acc['status'] = 'Launched (Wait)'
         else:
             acc['status'] = 'Launch Failed'
@@ -594,7 +618,8 @@ def start_rejoin_app():
             if do_mute:   mute_roblox()
             if do_lowgfx:
                 set_low_graphics(pkg)
-            acc['launch_time'] = time.time()  # catat waktu launch
+            set_roblox_min_settings()  # auto tap grafik & volume di dalam Roblox
+            acc['launch_time'] = time.time()
             acc['res_lowered'] = False
             protect_app(pkg)
             
@@ -696,12 +721,13 @@ def start_rejoin_app():
                     run_root_cmd(f"am force-stop {pkg}")
                     time.sleep(2)
                     clear_cache_safe(pkg)
-                    open_ps_link(a['ps_link'], pkg, get_grid_bounds(a['index'], tot, sw, sh) if do_float else None)
+                    open_ps_link(a['ps_link'], pkg)
                     time.sleep(5)
                     if do_mute:   mute_roblox()
                     if do_lowgfx:
                         set_low_graphics(pkg)
-                        set_low_resolution()  # turun lagi setelah launch
+                        set_low_resolution()
+                    set_roblox_min_settings()  # auto tap grafik & volume
                     protect_app(pkg)
                     
                     for t in range(25, 0, -1):
