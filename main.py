@@ -430,13 +430,16 @@ def save_refreshed_cookie(uid, new_cookie):
     except: pass
 
 def mute_roblox():
-    # Cara 1: media volume command
+    # appops blokir audio per-app (terbukti jalan di Redfinger)
+    run_root_cmd("appops set com.roblox.client PLAY_AUDIO deny 2>/dev/null || true")
+    # Backup: turunkan volume system juga
     run_root_cmd("media volume --stream 3 --set 0 2>/dev/null || true")
-    # Cara 2: service call audio (lebih kompatibel)
-    run_root_cmd("service call audio 3 i32 3 i32 0 i32 1 2>/dev/null || true")
-    # Cara 3: set via settings
     run_root_cmd("settings put system volume_music 0 2>/dev/null || true")
     log_activity("Roblox muted")
+
+def unmute_roblox():
+    run_root_cmd("appops set com.roblox.client PLAY_AUDIO allow 2>/dev/null || true")
+    log_activity("Roblox unmuted")
 
 def set_low_graphics(pkg):
     pref = f"/data/data/{pkg}/shared_prefs"
@@ -520,6 +523,23 @@ def start_rejoin_app():
         
     clear_screen()
     run_root_cmd("setenforce 0")
+
+    # Tampil instruksi manual untuk grafik & resolusi
+    print("=" * 50)
+    print("  SEBELUM MULAI - LAKUKAN MANUAL DI ROBLOX:")
+    print("=" * 50)
+    print("")
+    print("  1. GRAFIK: Settings Roblox")
+    print("             Graphics Mode: Manual")
+    print("             Graphics Quality: Level 1")
+    print("")
+    print("  2. VOLUME: Kecilkan volume di sidebar")
+    print("             Redfinger (tombol volume)")
+    print("")
+    print("  Setelah itu script akan jalan otomatis...")
+    print("=" * 50)
+    time.sleep(8)
+    clear_screen()
     
     interval      = config.get("check_interval", 35)
     restart_delay = config.get("restart_delay", 15)
@@ -542,7 +562,9 @@ def start_rejoin_app():
             'ps_link': a.get('ps_link'),
             'status': 'Pending Start',
             'expected_game': None,
-            'freeze_count': 0
+            'freeze_count': 0,
+            'launch_time': time.time(),
+            'res_lowered': False
         })
         
     draw_ui(accounts, "Starting Up...", "")
@@ -551,6 +573,7 @@ def start_rejoin_app():
         pkg = acc['package']
         acc['status'] = 'Force stop...'
         draw_ui(accounts, "Launching Accounts", f"[{i+1}/{tot}]")
+        restore_resolution()  # pastikan DPI 500 & resolusi normal sebelum launch
         run_root_cmd(f"am force-stop {pkg}")
         time.sleep(1)
 
@@ -571,7 +594,8 @@ def start_rejoin_app():
             if do_mute:   mute_roblox()
             if do_lowgfx:
                 set_low_graphics(pkg)
-                set_low_resolution()
+            acc['launch_time'] = time.time()  # catat waktu launch
+            acc['res_lowered'] = False
             protect_app(pkg)
             
         if i < tot - 1:
@@ -606,6 +630,14 @@ def start_rejoin_app():
                 pkg  = a['package']
                 uid  = a['user_id']
                 cook = a['cookie']
+
+                # Cek 20 menit sejak launch, baru turunkan resolusi
+                if do_lowgfx and not a.get('res_lowered', False):
+                    elapsed = time.time() - a.get('launch_time', time.time())
+                    if elapsed >= 1800:  # 30 menit = 1800 detik
+                        set_low_resolution()
+                        a['res_lowered'] = True
+                        log_activity(f"{a['name']}: resolusi turun 540x960 setelah 30 menit")
 
                 if not is_roblox_running(pkg):
                     needs_rejoin, reason = True, "App closed"
@@ -658,6 +690,9 @@ def start_rejoin_app():
                     a['status'] = "Restarting..."
                     draw_ui(accounts, "Monitoring", f"Fix {a['name']}", nxt_wh)
                     
+                    restore_resolution()  # balik normal dulu sebelum stop
+                    a['res_lowered'] = False
+                    a['launch_time'] = time.time()  # reset timer
                     run_root_cmd(f"am force-stop {pkg}")
                     time.sleep(2)
                     clear_cache_safe(pkg)
@@ -666,7 +701,7 @@ def start_rejoin_app():
                     if do_mute:   mute_roblox()
                     if do_lowgfx:
                         set_low_graphics(pkg)
-                        set_low_resolution()
+                        set_low_resolution()  # turun lagi setelah launch
                     protect_app(pkg)
                     
                     for t in range(25, 0, -1):
