@@ -50,7 +50,8 @@ echo ""; pr "[v] Dependencies OK" "$GRE"; echo ""
 # Wakelock
 pr "[*] Aktifkan wakelock..." "$YEL"
 if command -v termux-wake-lock &>/dev/null; then
-    termux-wake-lock &; pr "  v wakelock aktif" "$GRE"
+    termux-wake-lock &
+pr "  v wakelock aktif" "$GRE"
 else
     pr "  ! termux-wake-lock tidak ada" "$YEL"
 fi
