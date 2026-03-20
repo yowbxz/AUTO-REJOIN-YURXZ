@@ -1,115 +1,104 @@
 #!/bin/bash
-# ╔══════════════════════════════════════════════╗
-# ║   🔧 start.sh — Launcher                    ║
-# ║   YURXZ Rejoin v9                           ║
-# ╚══════════════════════════════════════════════╝
+# YURXZ Rejoin v9 — start.sh
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 
 RED='\033[0;31m'; YEL='\033[0;33m'; GRE='\033[0;32m'
-CYA='\033[0;36m'; RES='\033[0m'
+CYA='\033[0;36m'; RES='\033[0m'; MGA='\033[0;35m'; GRY='\033[0;37m'
 
-echo -e "\n${CYA}══════════════════════════════════════${RES}"
-echo -e "${CYA}  🎮 YURXZ Rejoin v9 — Launcher      ${RES}"
-echo -e "${CYA}     by YURXZ                         ${RES}"
-echo -e "${CYA}══════════════════════════════════════${RES}\n"
+# Auto detect lebar terminal
+W=$(tput cols 2>/dev/null || echo 44)
+[ "$W" -lt 30 ] && W=30
+SEP=$(printf '=%.0s' $(seq 1 $W))
+SEP2=$(printf '-%.0s' $(seq 1 $W))
 
-# ── Auto install dependencies ─────────────────────────
-echo -e "${YEL}[*] Cek & install dependencies...${RES}"
+pr() { printf "${2:-$RES}  %-$((W-2))s${RES}\n" "$1"; }
 
+clear
+echo -e "${CYA}${SEP}${RES}"
+pr "YURXZ Rejoin v9  --  Launcher" "$MGA"
+pr "by YURXZ" "$GRY"
+echo -e "${CYA}${SEP2}${RES}"; echo ""
+
+# Dependencies
+pr "[*] Cek & install dependencies..." "$YEL"
 pkg update -y -q 2>/dev/null
 
 install_if_missing() {
     if ! command -v "$1" &>/dev/null; then
-        echo -e "${YEL}    → Install $2...${RES}"
+        pr "  -> Install $2..." "$YEL"
         pkg install -y "$2" -q 2>/dev/null
     else
-        echo -e "${GRE}    ✓ $1 sudah ada${RES}"
+        pr "  v $1 sudah ada" "$GRE"
     fi
 }
+install_if_missing python3 python
+install_if_missing pip3 python-pip
+install_if_missing nano nano
 
-install_if_missing python3  python
-install_if_missing pip3     python-pip
-install_if_missing nano     nano
-
-# Python packages
-PY_PKGS=("requests")
-for pkg_py in "${PY_PKGS[@]}"; do
+for pkg_py in requests; do
     if ! python3 -c "import $pkg_py" 2>/dev/null; then
-        echo -e "${YEL}    → pip install $pkg_py...${RES}"
+        pr "  -> pip install $pkg_py..." "$YEL"
         pip3 install "$pkg_py" -q
     else
-        echo -e "${GRE}    ✓ $pkg_py sudah ada${RES}"
+        pr "  v $pkg_py sudah ada" "$GRE"
     fi
 done
+echo ""; pr "[v] Dependencies OK" "$GRE"; echo ""
 
-echo -e "\n${GRE}[✓] Dependencies OK${RES}\n"
-
-# ── Wakelock ──────────────────────────────────────────
-echo -e "${YEL}[*] Aktifkan wakelock...${RES}"
+# Wakelock
+pr "[*] Aktifkan wakelock..." "$YEL"
 if command -v termux-wake-lock &>/dev/null; then
-    termux-wake-lock &
-    echo -e "${GRE}    ✓ termux-wake-lock aktif${RES}"
+    termux-wake-lock &; pr "  v wakelock aktif" "$GRE"
 else
-    echo -e "${YEL}    ⚠ termux-wake-lock tidak ada (install termux-api jika perlu)${RES}"
+    pr "  ! termux-wake-lock tidak ada" "$YEL"
 fi
 
-# ── Buat stop.sh otomatis ────────────────────────────
+# Buat stop.sh
 cat > "$DIR/stop.sh" << 'STOPEOF'
 #!/bin/bash
-# ╔══════════════════════════════════════════════╗
-# ║   🛑 stop.sh — Stopper                      ║
-# ║   YURXZ Rejoin v9                           ║
-# ╚══════════════════════════════════════════════╝
-echo -e "\033[0;33m[!] Menghentikan YURXZ Rejoin v9...\033[0m"
-pkill -f "main.py" 2>/dev/null
-pkill -f "python3 main" 2>/dev/null
-if command -v termux-wake-unlock &>/dev/null; then
-    termux-wake-unlock
-fi
-echo -e "\033[0;32m[✓] Dihentikan.\033[0m"
+W=$(tput cols 2>/dev/null || echo 44); SEP=$(printf '=%.0s' $(seq 1 $W))
+echo -e "\033[0;36m${SEP}\033[0m"
+printf "\033[0;35m  %-$((W-2))s\033[0m\n" "YURXZ Rejoin v9 -- Stopper"
+echo -e "\033[0;36m${SEP}\033[0m"; echo ""
+pkill -f "main.py" 2>/dev/null; pkill -f "python3 main" 2>/dev/null
+command -v termux-wake-unlock &>/dev/null && termux-wake-unlock
+echo -e "\033[0;32m[v] Dihentikan.\033[0m"
 STOPEOF
 chmod +x "$DIR/stop.sh"
-echo -e "${GRE}[✓] stop.sh dibuat${RES}\n"
+pr "[v] stop.sh dibuat" "$GRE"; echo ""
 
-# ── Proteksi proses ───────────────────────────────────
 renice -5 $$ 2>/dev/null
 
-# ── Cek root ─────────────────────────────────────────
-echo -e "${YEL}[*] Cek root...${RES}"
+# Cek root
+pr "[*] Cek root..." "$YEL"
 if su -c "id" &>/dev/null; then
-    echo -e "${GRE}    ✓ Root tersedia${RES}\n"
+    pr "  v Root tersedia" "$GRE"; echo ""
 else
-    echo -e "${RED}    ✗ Root TIDAK tersedia! Script butuh root.${RES}"
-    echo -e "${RED}      Pastikan Termux sudah di-grant su access.${RES}\n"
-    exit 1
+    pr "  x Root TIDAK tersedia! Grant su ke Termux dulu." "$RED"; echo ""; exit 1
 fi
 
-# ── Parse argumen ─────────────────────────────────────
-EXTRA_ARGS=""
-for arg in "$@"; do
-    EXTRA_ARGS="$EXTRA_ARGS $arg"
-done
+# Fix terminal
+export TERM=xterm-256color
+stty sane 2>/dev/null || true
 
-# ── Jalankan main.py dengan watchdog ─────────────────
-echo -e "${CYA}[*] Menjalankan YURXZ Rejoin v9...${RES}"
-echo -e "${YEL}    (Gunakan stop.sh atau Ctrl+C untuk berhenti)${RES}\n"
+EXTRA_ARGS=""
+for arg in "$@"; do EXTRA_ARGS="$EXTRA_ARGS $arg"; done
+
+echo -e "${CYA}${SEP}${RES}"
+pr "[*] Menjalankan YURXZ Rejoin v9..." "$CYA"
+pr "    bash stop.sh atau Ctrl+C untuk berhenti" "$YEL"
+echo -e "${CYA}${SEP}${RES}"; echo ""
 
 while true; do
     python3 "$DIR/main.py" $EXTRA_ARGS
     EXIT_CODE=$?
-
     if [ $EXIT_CODE -eq 0 ] || [ $EXIT_CODE -eq 130 ]; then
-        echo -e "\n${GRE}[✓] Keluar normal.${RES}"
-        break
+        echo ""; pr "[v] Keluar normal." "$GRE"; break
     fi
-
-    echo -e "\n${RED}[!] main.py crash (code $EXIT_CODE). Restart dalam 10 detik...${RES}"
-    echo -e "${YEL}    Ctrl+C sekarang untuk batal.${RES}"
-    sleep 10
+    echo ""; pr "[!] Crash (code $EXIT_CODE). Restart 10 detik..." "$RED"
+    pr "    Ctrl+C untuk batal." "$YEL"; sleep 10
 done
 
-if command -v termux-wake-unlock &>/dev/null; then
-    termux-wake-unlock 2>/dev/null
-fi
+command -v termux-wake-unlock &>/dev/null && termux-wake-unlock 2>/dev/null

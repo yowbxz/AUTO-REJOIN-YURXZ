@@ -1,61 +1,54 @@
 #!/bin/bash
-# ╔══════════════════════════════════════════════╗
-# ║   📦 setup.sh — First Time Installer        ║
-# ║   YURXZ Rejoin v9                           ║
-# ╚══════════════════════════════════════════════╝
+# YURXZ Rejoin v9 — setup.sh
 
 RED='\033[0;31m'; YEL='\033[0;33m'; GRE='\033[0;32m'
-CYA='\033[0;36m'; RES='\033[0m'; BLD='\033[1m'
+CYA='\033[0;36m'; RES='\033[0m'; MGA='\033[0;35m'; GRY='\033[0;37m'
 
-DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$DIR"
+DIR="$(cd "$(dirname "$0")" && pwd)"; cd "$DIR"
+
+W=$(tput cols 2>/dev/null || echo 44)
+[ "$W" -lt 30 ] && W=30
+SEP=$(printf '=%.0s' $(seq 1 $W))
+SEP2=$(printf '-%.0s' $(seq 1 $W))
+
+pr() { printf "${2:-$RES}  %-$((W-2))s${RES}\n" "$1"; }
 
 clear
-echo -e "${CYA}${BLD}"
-echo "╔══════════════════════════════════════════════╗"
-echo "║   📦 YURXZ Rejoin v9 — Setup               ║"
-echo "║   Android Rooted + Termux   by YURXZ        ║"
-echo "╚══════════════════════════════════════════════╝"
-echo -e "${RES}\n"
+echo -e "${CYA}${SEP}${RES}"
+pr "YURXZ Rejoin v9  --  Setup" "$MGA"
+pr "Android Rooted + Termux  by YURXZ" "$GRY"
+echo -e "${CYA}${SEP}${RES}"; echo ""
 
-# ── Cek root ─────────────────────────────────────────
-echo -e "${YEL}[1/5] Cek root access...${RES}"
+# [1/5] Root
+pr "[1/5] Cek root access..." "$YEL"
 if ! su -c "id" &>/dev/null; then
-    echo -e "${RED}  ✗ Root tidak tersedia!${RES}"
-    echo -e "${RED}    Pastikan Termux sudah diberi akses su.${RES}"
-    exit 1
+    pr "  x Root tidak tersedia! Grant su ke Termux dulu." "$RED"; exit 1
 fi
-echo -e "${GRE}  ✓ Root OK${RES}\n"
+pr "  v Root OK" "$GRE"; echo ""
 
-# ── Update & install packages ─────────────────────────
-echo -e "${YEL}[2/5] Update dan install packages Termux...${RES}"
-pkg update -y -q 2>/dev/null
-pkg upgrade -y -q 2>/dev/null
-
-PKGS=(python python-pip nano curl wget git)
-for p in "${PKGS[@]}"; do
+# [2/5] Install packages
+pr "[2/5] Update dan install packages Termux..." "$YEL"
+pkg update -y -q 2>/dev/null; pkg upgrade -y -q 2>/dev/null
+for p in python python-pip nano curl wget git; do
     if dpkg -s "$p" &>/dev/null; then
-        echo -e "${GRE}  ✓ $p${RES}"
+        pr "  v $p" "$GRE"
     else
-        echo -e "${YEL}  → Install $p...${RES}"
+        pr "  -> Install $p..." "$YEL"
         pkg install -y "$p" -q 2>/dev/null
-        echo -e "${GRE}  ✓ $p terpasang${RES}"
+        pr "  v $p terpasang" "$GRE"
     fi
-done
-echo ""
+done; echo ""
 
-# ── Install Python packages ───────────────────────────
-echo -e "${YEL}[3/5] Install Python packages...${RES}"
-PY_PKGS=(requests)
-for pp in "${PY_PKGS[@]}"; do
-    echo -e "${YEL}  → pip install $pp...${RES}"
+# [3/5] Python packages
+pr "[3/5] Install Python packages..." "$YEL"
+for pp in requests; do
+    pr "  -> pip install $pp..." "$YEL"
     pip3 install "$pp" -q
-    echo -e "${GRE}  ✓ $pp${RES}"
-done
-echo ""
+    pr "  v $pp" "$GRE"
+done; echo ""
 
-# ── Buat file config kosong kalau belum ada ───────────
-echo -e "${YEL}[4/5] Inisialisasi file...${RES}"
+# [4/5] Init file
+pr "[4/5] Inisialisasi file..." "$YEL"
 if [ ! -f "$DIR/config.json" ]; then
     cat > "$DIR/config.json" << 'CFEOF'
 {
@@ -70,26 +63,23 @@ if [ ! -f "$DIR/config.json" ]; then
   "auto_low_graphics": true
 }
 CFEOF
-    echo -e "${GRE}  ✓ config.json dibuat (kosong)${RES}"
+    pr "  v config.json dibuat" "$GRE"
 else
-    echo -e "${GRE}  ✓ config.json sudah ada${RES}"
+    pr "  v config.json sudah ada" "$GRE"
 fi
-
 touch "$DIR/activity.log" "$DIR/status.json"
 chmod +x "$DIR/main.py" "$DIR/start.sh" "$DIR/update.sh" 2>/dev/null
-echo -e "${GRE}  ✓ Permission file OK${RES}\n"
+pr "  v Permission OK" "$GRE"; echo ""
 
-# ── Selesai ───────────────────────────────────────────
-echo -e "${YEL}[5/5] Setup selesai!${RES}\n"
-echo -e "${CYA}${BLD}══════════════════════════════════════${RES}"
-echo -e "${GRE}  ✅ Instalasi berhasil!${RES}"
+# [5/5] Done
+pr "[5/5] Setup selesai!" "$YEL"; echo ""
+echo -e "${CYA}${SEP}${RES}"
+pr "OK Instalasi berhasil!" "$GRE"; echo ""
+pr "Langkah selanjutnya:" "$YEL"
+pr "  1. bash start.sh" "$CYA"
+pr "  2. Menu 2  -> Detect packages Roblox" "$GRY"
+pr "  3. Menu 3  -> Set PS Link / Game ID" "$GRY"
+pr "  4. Menu 1  -> Start Auto Rejoin" "$GRY"
 echo ""
-echo -e "  Langkah selanjutnya:"
-echo -e "  ${BLD}1.${RES} Jalankan: ${CYA}bash start.sh${RES}"
-echo -e "  ${BLD}2.${RES} Menu ${CYA}2${RES} → Detect packages Roblox"
-echo -e "  ${BLD}3.${RES} Menu ${CYA}3${RES} → Set PS Link / Game ID"
-echo -e "  ${BLD}4.${RES} Menu ${CYA}1${RES} → Start Auto Rejoin"
-echo ""
-echo -e "  Atau langsung:"
-echo -e "  ${CYA}bash start.sh --auto${RES}"
-echo -e "${CYA}${BLD}══════════════════════════════════════${RES}\n"
+pr "Atau langsung: bash start.sh --auto" "$CYA"
+echo -e "${CYA}${SEP}${RES}"; echo ""

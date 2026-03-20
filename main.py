@@ -171,8 +171,12 @@ def inp_text(prompt, timeout=120):
         except: pass
     return result
 
-def pause_auto(detik=3):
-    """Auto lanjut setelah beberapa detik. Tekan tombol apapun untuk skip."""
+def pause_auto(detik=5):
+    """
+    Auto lanjut setelah beberapa detik.
+    - Tekan ENTER / sembarang tombol → lanjut sekarang
+    - Tekan 's' atau 'S' → STOP / tahan (tunggu input lagi)
+    """
     import select
     tty = _open_tty()
     src = tty if tty else sys.stdin
@@ -185,14 +189,43 @@ def pause_auto(detik=3):
     except:
         raw_ok = False
 
+    stopped = False
     try:
         for i in range(detik, 0, -1):
-            sys.stdout.write(f"\r  {GY}Lanjut dalam {i}s... (tekan tombol apapun untuk skip){R}  ")
+            if stopped:
+                break
+            sys.stdout.write(
+                f"\r  {GY}Lanjut dalam {i}s... "
+                f"[Enter=lanjut | S=stop/tahan]{R}  "
+            )
             sys.stdout.flush()
             ready, _, _ = select.select([src], [], [], 1)
             if ready:
-                src.read(1)
-                break
+                ch = src.read(1)
+                if isinstance(ch, bytes):
+                    try: ch = ch.decode('utf-8', errors='ignore')
+                    except: ch = ''
+                if ch.lower() == 's':
+                    # Mode STOP — tahan di sini sampai user tekan Enter
+                    sys.stdout.write(
+                        f"\r  {YE}[STOP] Ditahan. Tekan Enter untuk lanjut...{R}          "
+                    )
+                    sys.stdout.flush()
+                    stopped = True
+                    # Tunggu input lagi tanpa timeout
+                    while True:
+                        r2, _, _ = select.select([src], [], [], 60)
+                        if r2:
+                            ch2 = src.read(1)
+                            if isinstance(ch2, bytes):
+                                try: ch2 = ch2.decode('utf-8', errors='ignore')
+                                except: ch2 = ''
+                            # Enter atau tombol apapun → lanjut
+                            break
+                else:
+                    # Tombol lain → lanjut sekarang
+                    break
+
     except:
         time.sleep(detik)
     finally:
@@ -205,7 +238,7 @@ def pause_auto(detik=3):
             try: tty.close()
             except: pass
 
-    sys.stdout.write("\r" + " "*60 + "\r")
+    sys.stdout.write("\r" + " "*65 + "\r")
     sys.stdout.flush()
 
 def get_memory():
@@ -661,20 +694,72 @@ MENU_ITEMS = [
     ("14", "Exit"),
 ]
 
+MENU_ITEMS = [
+    ( "1",  "Start Auto Rejoin"),
+    ( "2",  "Detect Packages Roblox"),
+    ( "3",  "Set PS Link (Semua)"),
+    ( "4",  "Set PS Link per Package"),
+    ( "5",  "Clear Config"),
+    ( "6",  "List Config"),
+    ( "7",  "Setup Webhook"),
+    ( "8",  "Set Interval"),
+    ( "9",  "Toggle Floating Window"),
+    ("10",  "Toggle Auto Mute"),
+    ("11",  "Toggle Low Grafik"),
+    ("12",  "Diagnostic"),
+    ("13",  "Lihat Log"),
+    ("14",  "Exit"),
+]
+
+def get_term_width():
+    """Auto detect lebar terminal — sama persis dengan draw_ui."""
+    try:
+        import shutil
+        return shutil.get_terminal_size().columns
+    except:
+        pass
+    try:
+        cols = int(os.environ.get("COLUMNS", 0))
+        if cols > 0:
+            return cols
+    except:
+        pass
+    return 50
+
 def print_banner():
     sys.stdout.write("\033[2J\033[H")
     sys.stdout.flush()
     mem, mpct = get_memory()
     cfg  = load_cfg()
     pkgs = cfg.get("packages", [])
-    print(f"{CY}+{'='*38}+{R}")
-    print(f"{MG}  YURXZ Rejoin v9  --  No Cookie{R}")
-    print(f"{GY}  by YURXZ | RAM: {mem} ({mpct}%){R}")
-    print(f"{GY}  Packages: {len(pkgs)}{R}")
-    print(f"{CY}+{'='*38}+{R}")
+
+    # Auto detect lebar — sama dengan draw_ui
+    W  = max(32, get_term_width() - 1)
+    c1 = int(W * 0.60)
+    c2 = W - c1 - 3
+
+    def trunc(s, l):
+        s = str(s).replace('\n','').replace('\r','')
+        return s[:l-1] + "." if len(s) > l else s
+
+    def sep(lc, mc, rc, ch='\u2500'):
+        sys.stdout.write(f"{CY}{lc}{ch*(c1+1)}{mc}{ch*(c2+1)}{rc}{R}\n")
+
+    def row(t1, t2, col=R):
+        sys.stdout.write(
+            f"{CY}\u2502{R} {trunc(t1,c1):<{c1}} "
+            f"{CY}\u2502{col} {trunc(t2,c2):<{c2}}{R} {CY}\u2502{R}\n"
+        )
+
+    sys.stdout.write(f"\n{MG}  \U0001f3ae YURXZ Rejoin v9  |  No Cookie  |  by YURXZ{R}\n")
+    sys.stdout.write(f"{GY}  RAM: {mem} ({mpct}%) | Packages: {len(pkgs)}{R}\n\n")
+
+    sep("\u250c", "\u252c", "\u2510")
+    row("No", "Menu")
+    sep("\u251c", "\u253c", "\u2524")
     for num, label in MENU_ITEMS:
-        print(f"  {YE}{num:<3}{R} {WH}{label}{R}")
-    print(f"{CY}+{'='*38}+{R}")
+        row(f"  {YE}{num}", f"{WH}{label}")
+    sep("\u2514", "\u2534", "\u2518", "\u2500")
     print()
 
 # ==========================================================
@@ -685,43 +770,69 @@ def draw_ui(accounts, sys_status, prog="", nxt_wh=""):
     sys.stdout.flush()
     mem, mpct = get_memory()
 
+    # Auto detect lebar terminal
+    try:
+        import shutil
+        W = shutil.get_terminal_size().columns
+    except:
+        W = int(os.environ.get("COLUMNS", 50))
+    W = max(32, W - 1)
+
+    c1 = int(W * 0.60)
+    c2 = W - c1 - 3
+
+    def trunc(s, l):
+        s = str(s).replace('\n','').replace('\r','')
+        return s[:l-1] + "." if len(s) > l else s
+
+    def sep(lc, mc, rc, ch='\u2500'):
+        sys.stdout.write(f"{CY}{lc}{ch*(c1+1)}{mc}{ch*(c2+1)}{rc}{R}\n")
+
+    def row(t1, t2, col=R):
+        sys.stdout.write(
+            f"{CY}\u2502{R} {trunc(t1,c1):<{c1}} "
+            f"{CY}\u2502{col} {trunc(t2,c2):<{c2}}{R} {CY}\u2502{R}\n"
+        )
+
     st_txt = (prog + " " if prog else "") + (sys_status or "Idle")
     if nxt_wh: st_txt += f" | {nxt_wh}"
-
-    print(f"{CY}+{'='*38}+{R}")
-    print(f"{MG}  YURXZ Rejoin v9  |  by YURXZ{R}")
-    print(f"{CY}+{'='*38}+{R}")
-    print(f"{YE}  [*] {st_txt}{R}")
-    print(f"{GY}  [M] RAM: {mem} ({mpct}%){R}")
 
     mode = []
     if ARGS.preventif: mode.append("PREVENTIF")
     if ARGS.low:       mode.append("LOW-PERF")
-    if mode: print(f"{GY}  [~] {' | '.join(mode)}{R}")
 
-    print(f"{CY}+{'-'*38}+{R}")
+    sys.stdout.write(f"\n{MG}  \U0001f3ae YURXZ Rejoin v9  |  No Cookie  |  by YURXZ{R}\n\n")
+    sep("\u250c", "\u252c", "\u2510")
+    row("INFO", "STATUS")
+    sep("\u251c", "\u253c", "\u2524")
+    row("\u2699  System", st_txt, YE)
+    row("\U0001f4be Memory", f"Free: {mem} ({mpct}%)", GY)
+    if mode: row("\U0001f527 Mode", " | ".join(mode), GY)
+    sep("\u251c", "\u253c", "\u2524")
+    row("PACKAGE", "STATUS")
+    sep("\u251c", "\u253c", "\u2524")
 
     for a in accounts:
         st  = a.get("status", "?")
         mtd = a.get("method", "auto")
-        mtd_label = {
-            "activity": "[A]",
-            "network":  "[N]",
-            "cpu":      "[C]",
-            "pidof":    "[P]",
-        }.get(mtd, "[?]")
+        mtd_icon = {
+            "activity": "\U0001f4cb",
+            "network":  "\U0001f310",
+            "cpu":      "\U0001f4bb",
+            "pidof":    "\U0001f50d",
+        }.get(mtd, "\u2699")
         col = GR
-        if any(x in st for x in ["Restart","Launch","Wait","Cache","Stop","Loading"]):
+        if any(x in st for x in ["Restart","Launch","Wait","Cache","Stop","Loading","Cek","Detect"]):
             col = YE
         elif any(x in st for x in ["Error","Failed","Crash","Freeze","mati","putus"]):
             col = RE
-        elif any(x in st for x in ["Checking","Idle","Pending","Cek"]):
+        elif any(x in st for x in ["Idle","Pending"]):
             col = GY
-        pkg_short = a.get('pkg','?').replace('com.roblox.','')
-        print(f"  {mtd_label} {col}{pkg_short:<20} {st}{R}")
+        pkg = a.get('pkg', '?')
+        row(f"  {mtd_icon} {pkg}", st, col)
 
-    print(f"{CY}+{'='*38}+{R}")
-    print(f"{GY}  Ctrl+C untuk berhenti{R}")
+    sep("\u2514", "\u2534", "\u2518", "\u2500")
+    sys.stdout.write(f"\n{GY}  [q]=berhenti  [Ctrl+C]=force stop{R}\n")
     sys.stdout.flush()
 
 # ==========================================================
@@ -943,14 +1054,38 @@ def menu_start_rejoin():
             except:
                 pass
 
-            # Countdown idle
+            # Countdown idle — cek tombol q untuk berhenti
             step = 2 if ARGS.low else 1
+            import signal
+            # Pastikan SIGINT tetap work
+            signal.signal(signal.SIGINT, signal.default_int_handler)
             for t in range(interval, 0, -step):
-                draw_ui(accounts, "Idle", f"Next Check: {t}s", nxt_wh)
-                time.sleep(step)
+                draw_ui(accounts, "Idle", f"Next: {t}s [q=stop]", nxt_wh)
+                # Cek input non-blocking selama sleep
+                try:
+                    import select
+                    tty_q = _open_tty()
+                    src_q = tty_q if tty_q else sys.stdin
+                    ready, _, _ = select.select([src_q], [], [], step)
+                    if ready:
+                        ch = src_q.read(1)
+                        if isinstance(ch, bytes):
+                            try: ch = ch.decode('utf-8', errors='ignore')
+                            except: ch = ''
+                        if ch.lower() in ('q', '\x03', '\x1b'):
+                            if tty_q:
+                                try: tty_q.close()
+                                except: pass
+                            raise KeyboardInterrupt
+                    if tty_q:
+                        try: tty_q.close()
+                        except: pass
+                except KeyboardInterrupt:
+                    raise
+                except:
+                    time.sleep(step)
 
     except KeyboardInterrupt:
-        sys.stdout.write("\033[?25h")
         print(f"\n{YE}[!] Dihentikan.{R}\n")
 
 def _send_webhook_nocookie(url, accounts, title="📊 Status Update", color=3447003):
@@ -1003,13 +1138,13 @@ def menu_detect_packages():
 def menu_set_global_ps():
     cfg = load_cfg()
     print(f"\n{CY}[ Set PS Link / Game ID untuk Semua Package ]{R}")
-    print(f"{GY}{'-'*50}{R}")
+    print(f"{GY}{'-'*get_term_width()}{R}")
     print(f"{GY}Format yang bisa diinput:{R}")
     print(f"  {WH}1. Game ID biasa     {GY}→ {GR}995679412{R}")
     print(f"  {WH}2. Roblox URI        {GY}→ {GR}roblox://placeId=995679412{R}")
     print(f"  {WH}3. Link game Roblox  {GY}→ {GR}https://www.roblox.com/games/995679412/...{R}")
     print(f"  {WH}4. Private Server    {GY}→ {GR}https://www.roblox.com/games/...?privateServerLinkCode=xxx{R}")
-    print(f"{GY}{'-'*50}{R}")
+    print(f"{GY}{'-'*get_term_width()}{R}")
     current = cfg.get("global_ps_link","")
     if current:
         parsed = parse_launch_link(current)
@@ -1040,13 +1175,13 @@ def menu_set_per_pkg_ps():
     cfg  = load_cfg()
     pkgs = cfg.get("packages", find_installed_pkgs())
     print(f"\n{CY}[ Set PS Link / Game ID per Package ]{R}")
-    print(f"{GY}{'-'*50}{R}")
+    print(f"{GY}{'-'*get_term_width()}{R}")
     print(f"{GY}Format yang bisa diinput:{R}")
     print(f"  {WH}1. Game ID biasa  {GY}→ {GR}995679412{R}")
     print(f"  {WH}2. Roblox URI     {GY}→ {GR}roblox://placeId=995679412{R}")
     print(f"  {WH}3. Link game      {GY}→ {GR}https://www.roblox.com/games/...{R}")
     print(f"  {WH}4. Private Server {GY}→ {GR}https://www.roblox.com/...?privateServerLinkCode=xxx{R}")
-    print(f"{GY}{'-'*50}{R}\n")
+    print(f"{GY}{'-'*get_term_width()}{R}\n")
     ps_links = cfg.get("ps_links", {})
     for pkg in pkgs:
         current = ps_links.get(pkg,"")
@@ -1096,9 +1231,9 @@ def menu_clear_config():
 # ==========================================================
 def menu_list_config():
     cfg = load_cfg()
-    print(f"\n{CY}{'='*55}{R}")
+    print(f"\n{CY}{'='*get_term_width()}{R}")
     print(f"{CY}  LIST CONFIG{R}")
-    print(f"{CY}{'='*55}{R}")
+    print(f"{CY}{'='*get_term_width()}{R}")
     print(f"{YE}Packages ({len(cfg.get('packages',[]))}):{R}")
     for p in cfg.get("packages",[]):
         ps = cfg.get("ps_links",{}).get(p,"(belum diset)")
@@ -1114,7 +1249,7 @@ def menu_list_config():
     print(f"{YE}Auto Mute     :{R} {'✅' if cfg.get('auto_mute') else '❌'}")
     print(f"{YE}Low Grafik    :{R} {'✅' if cfg.get('auto_low_graphics') else '❌'}")
     print(f"{YE}Webhook       :{R} {cfg.get('webhook_url','(kosong)')[:50]}")
-    print(f"{CY}{'='*55}{R}")
+    print(f"{CY}{'='*get_term_width()}{R}")
     pause_auto()
 
 # ==========================================================
@@ -1184,9 +1319,9 @@ def menu_lihat_log():
 # ==========================================================
 def menu_diagnostic():
     clear()
-    print(f"\n{CY}+{'='*52}+{R}")
+    print(f"\n{CY}+{'='*get_term_width()}+{R}")
     print(f"{CY}|{MG}   DIAGNOSTIC — Test Kompatibilitas HP Ini       {CY}|{R}")
-    print(f"{CY}+{'='*52}+{R}\n")
+    print(f"{CY}+{'='*get_term_width()}+{R}\n")
 
     def ok_str(v): return f"{GR}✅ WORK{R}" if v else f"{RE}❌ TIDAK WORK{R}"
 
@@ -1253,9 +1388,9 @@ def menu_diagnostic():
     print(f"    {ok_str(am_ok)}")
 
     # -- Kesimpulan ---------------------------------------
-    print(f"\n{CY}{'='*52}{R}")
+    print(f"\n{CY}{'='*get_term_width()}{R}")
     print(f"{CY}  KESIMPULAN — Metode Deteksi yang akan dipakai:{R}")
-    print(f"{CY}{'='*52}{R}")
+    print(f"{CY}{'='*get_term_width()}{R}")
     if dumpsys_ok:
         print(f"  {GR}✅ UTAMA  : dumpsys activity (paling akurat){R}")
     else:
@@ -1285,7 +1420,7 @@ def menu_diagnostic():
         best = f"{YE}pidof only (basic){R}"
 
     print(f"\n  {WH}Script akan pakai: {best}")
-    print(f"{CY}{'='*52}{R}")
+    print(f"{CY}{'='*get_term_width()}{R}")
 
     # Simpan hasil ke config
     cfg = load_cfg()
@@ -1335,9 +1470,54 @@ def main():
             break
         fn = MENU_FN.get(c)
         if fn:
-            clear(); fn()
+            # Nama menu yang dipilih
+            label = next((l for n, l in MENU_ITEMS if n == c), f"Menu {c}")
+            # Countdown 5 detik sebelum masuk — bisa di-skip atau di-cancel
+            print(f"\n  {GY}>> {WH}{label}{R}")
+            cancelled = False
+            try:
+                import select, termios, tty as ttymod
+                tty = _open_tty()
+                src = tty if tty else sys.stdin
+                try:
+                    fd  = src.fileno()
+                    old = termios.tcgetattr(fd)
+                    ttymod.setraw(fd)
+                    raw_ok = True
+                except:
+                    raw_ok = False
+                for i in range(5, 0, -1):
+                    sys.stdout.write(
+                        f"\r  {GY}Masuk dalam {i}s... "
+                        f"[Enter=langsung | C=batal]{R}   "
+                    )
+                    sys.stdout.flush()
+                    ready, _, _ = select.select([src], [], [], 1)
+                    if ready:
+                        ch = src.read(1)
+                        if isinstance(ch, bytes):
+                            try: ch = ch.decode('utf-8', errors='ignore')
+                            except: ch = ''
+                        if ch.lower() == 'c':
+                            cancelled = True
+                        break
+                if raw_ok:
+                    try: termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                    except: pass
+                if tty:
+                    try: tty.close()
+                    except: pass
+            except:
+                time.sleep(2)
+            sys.stdout.write("\r" + " "*55 + "\r")
+            sys.stdout.flush()
+            if not cancelled:
+                clear(); fn()
+            else:
+                print(f"\n  {YE}Dibatalkan.{R}")
+                time.sleep(1)
         else:
-            print(f"{RE}Pilihan tidak valid!{R}")
+            print(f"\n  {RE}Pilihan tidak valid!{R}")
             time.sleep(1)
 
 if __name__ == "__main__":
