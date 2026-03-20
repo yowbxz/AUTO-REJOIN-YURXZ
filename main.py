@@ -1,944 +1,821 @@
 #!/usr/bin/env python3
 """
-╔══════════════════════════════════════════════════════╗
-║     🎮 Roblox Auto Rejoin — main.py                 ║
-║     Android Rooted + Termux | by YURXZ              ║
-╚══════════════════════════════════════════════════════╝
-  - Auto cek status game tiap 35 detik
-  - Auto reconnect / rejoin kalau disconnect
-  - Freeze detection via CPU usage
-  - Clear cache AMAN (tidak hapus login)
-  - Cookie expired auto-refresh
-  - Discord webhook + screenshot
-  - Protect app (anti-kill)
-  - Low performance mode (hemat RAM)
-  - Auto mute sound Roblox
-  - Auto low grafik Roblox
-  - Auto floating window Roblox di atas Termux
-  - --auto      : langsung mulai tanpa menu
-  - --preventif : cek tiap 20 detik
-  - --low       : low performance mode
+╔══════════════════════════════════════════════════════════╗
+║          YURXZ Rejoin  v9  —  main.py                  ║
+║          Android Rooted + Termux  |  by YURXZ          ║
+╠══════════════════════════════════════════════════════════╣
+║  Deteksi (tanpa cookie):                               ║
+║    Level 1 → dumpsys activity  (Activity name)         ║
+║    Level 2 → network check     (koneksi aktif)         ║
+║    Level 3 → CPU usage         (app aktif)             ║
+║    Level 4 → pidof             (fallback universal)    ║
+╠══════════════════════════════════════════════════════════╣
+║  --auto      : langsung mulai tanpa menu               ║
+║  --preventif : cek tiap 20 detik                       ║
+║  --low       : hemat RAM/CPU                           ║
+╚══════════════════════════════════════════════════════════╝
 """
 
-import os, sys, json, sqlite3, subprocess, shutil, requests, time, math, re, argparse
-from pathlib import Path
+import os, sys, json, subprocess, time, math, re, argparse
 
-# ─── ARGS ─────────────────────────────────────────────
-parser = argparse.ArgumentParser(description="Roblox Auto Rejoin by YURXZ")
-parser.add_argument("--auto",      action="store_true", help="Langsung mulai tanpa menu")
-parser.add_argument("--preventif", action="store_true", help="Cek tiap 20 detik")
-parser.add_argument("--low",       action="store_true", help="Low performance mode")
+# ─── ARGS ──────────────────────────────────────────────────
+parser = argparse.ArgumentParser()
+parser.add_argument("--auto",      action="store_true")
+parser.add_argument("--preventif", action="store_true")
+parser.add_argument("--low",       action="store_true")
 ARGS = parser.parse_args()
 
-CONFIG_FILE = "config.json"
+BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+LOG_FILE    = os.path.join(BASE_DIR, "activity.log")
+STATUS_FILE = os.path.join(BASE_DIR, "status.json")
 
-# ══════════════════════════════════════════════════════
-#  HELPERS DASAR
-# ══════════════════════════════════════════════════════
-def clear_screen():
+# ─── WARNA ─────────────────────────────────────────────────
+R  = "\033[0m"
+CY = "\033[96m"
+GR = "\033[92m"
+YE = "\033[93m"
+RE = "\033[91m"
+MG = "\033[95m"
+GY = "\033[90m"
+WH = "\033[97m"
+
+# ══════════════════════════════════════════════════════════
+#  HELPERS
+# ══════════════════════════════════════════════════════════
+def clear():
     os.system("clear")
 
-def print_header():
-    print("\n" + "="*50)
-    print("  🎮 Roblox Auto-Rejoin Tool  by YURXZ")
-    print("="*50 + "\n")
-
-def check_root():
+def run_root(cmd, timeout=15):
     try:
-        result = subprocess.run(['su', '-c', 'id'], capture_output=True, timeout=5)
-        return result.returncode == 0
-    except:
-        return False
-
-def run_root_cmd(cmd, timeout=15):
-    try:
-        result = subprocess.run(['su', '-c', cmd],
-                                capture_output=True, text=True, timeout=timeout)
-        out = (result.stdout or '') + '\n' + (result.stderr or '')
-        return result.returncode == 0, out.strip()
+        r = subprocess.run(["su", "-c", cmd],
+                           capture_output=True, text=True, timeout=timeout)
+        out = (r.stdout or "") + "\n" + (r.stderr or "")
+        return r.returncode == 0, out.strip()
     except Exception as e:
         return False, str(e)
 
-def log_activity(msg, lvl="INFO"):
+def log(msg, lvl="INFO"):
     try:
-        with open("activity.log", "a") as f:
-            f.write(f"[{time.strftime('%d/%m %H:%M:%S')}] [{lvl}] {msg}\n")
+        with open(LOG_FILE, "a") as f:
+            f.write(f"[{time.strftime('%d/%m %H:%M:%S')}][{lvl}] {msg}\n")
     except:
         pass
 
-def clean_input(prompt):
+def inp(prompt):
     print("\033[?25h", end="")
     sys.stdout.flush()
+    try:    return input(prompt).strip()
+    except: return ""
+
+def get_memory():
     try:
-        return input(prompt).strip()
-    except EOFError:
-        return ""
-
-# ══════════════════════════════════════════════════════
-#  CONFIG — CREATE & EDIT
-# ══════════════════════════════════════════════════════
-def check_package_installed(package_name):
-    success, output = run_root_cmd('pm list packages')
-    return success and package_name in output
-
-def find_roblox_packages():
-    browsers = {}
-    success, output = run_root_cmd('pm list packages')
-    if success:
-        for line in output.splitlines():
-            if 'com.roblox' in line and 'package:' in line:
-                pkg = line.replace('package:', '').strip()
-                browsers[f"Roblox ({pkg})"] = pkg
-    if not browsers:
-        browsers['Roblox App'] = 'com.roblox.client'
-    installed = {}
-    print("🔍 Detecting installed Roblox apps...\n")
-    for name, package in browsers.items():
-        if check_package_installed(package):
-            print(f"   ✓ {name}: Installed")
-            installed[name] = package
-    return installed
-
-def find_cookie_databases(package_name):
-    base_path = f"/data/data/{package_name}"
-    found_paths = []
-    print(f"   🔎 Searching inside: {base_path}...")
-    cmds = [
-        f'find {base_path} -type f -name "Cookies" 2>/dev/null',
-        f'find {base_path} -type f -name "cookies.sqlite" 2>/dev/null',
-        f'find {base_path} -type f -name "*cookie*" 2>/dev/null',
-    ]
-    for cmd in cmds:
-        success, output = run_root_cmd(cmd)
-        if success and output:
-            for path in output.split('\n'):
-                path = path.strip()
-                if path and path not in found_paths \
-                   and not path.endswith('-journal') \
-                   and not path.endswith('.tmp'):
-                    print(f"      → Found potential DB: {os.path.basename(path)}")
-                    found_paths.append(path)
-    if not found_paths:
-        print("      ⚠️  No cookie files found.")
-    return found_paths
-
-def copy_database(db_path, temp_path):
-    success, _ = run_root_cmd(f'cp "{db_path}" "{temp_path}" && chmod 666 "{temp_path}"')
-    return success
-
-def extract_cookie_chromium(db_path):
-    temp_db = "/sdcard/temp_cookies_chromium.db"
-    if not copy_database(db_path, temp_db):
-        return None
-    try:
-        conn = sqlite3.connect(temp_db)
-        cursor = conn.cursor()
-        try:
-            cursor.execute(
-                "SELECT name, value FROM cookies "
-                "WHERE (host_key LIKE '%roblox.com%') AND name = '.ROBLOSECURITY'"
-            )
-            result = cursor.fetchone()
-        except:
-            try:
-                cursor.execute("SELECT name, value FROM cookies WHERE name = '.ROBLOSECURITY'")
-                result = cursor.fetchone()
-            except:
-                result = None
-        conn.close()
-        run_root_cmd(f'rm "{temp_db}"')
-        return result[1] if result and len(result) > 1 else (result[0] if result else None)
-    except:
-        run_root_cmd(f'rm "{temp_db}"')
-        return None
-
-def extract_cookie_firefox(db_path):
-    temp_db = "/sdcard/temp_cookies_firefox.db"
-    if not copy_database(db_path, temp_db):
-        return None
-    try:
-        conn = sqlite3.connect(temp_db)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name, value FROM moz_cookies "
-            "WHERE host LIKE '%roblox.com%' AND name = '.ROBLOSECURITY'"
-        )
-        result = cursor.fetchone()
-        conn.close()
-        run_root_cmd(f'rm "{temp_db}"')
-        return result[1] if result else None
-    except:
-        run_root_cmd(f'rm "{temp_db}"')
-        return None
-
-def get_user_info(cookie):
-    try:
-        r = requests.get(
-            "https://users.roblox.com/v1/users/authenticated",
-            cookies={".ROBLOSECURITY": cookie},
-            timeout=5
-        )
-        if r.status_code == 200:
-            d = r.json()
-            return d.get('id'), d.get('name')
-        elif r.status_code == 401:
-            return None, None  # Cookie expired
-    except:
-        pass
-    return None, None
-
-def create_config():
-    clear_screen()
-    print_header()
-    if not check_root():
-        print("❌ Root access required!")
-        input("\nPress Enter to return...")
-        return
-
-    installed_browsers = find_roblox_packages()
-    if not installed_browsers:
-        print("\n❌ No Roblox apps found!")
-        input("\nPress Enter to return...")
-        return
-
-    print("\n  🔎 Searching for Roblox cookies...\n")
-    found_accounts = []
-    for browser_name, package_name in installed_browsers.items():
-        print(f"📱 Checking {browser_name}...")
-        db_paths = find_cookie_databases(package_name)
-        if not db_paths:
-            print(f"   ✗ No database found")
-            continue
-        for db_path in db_paths:
-            cookie = extract_cookie_firefox(db_path) \
-                if 'firefox' in package_name \
-                else extract_cookie_chromium(db_path)
-            if cookie:
-                print(f"   ✓ Cookie found! Package: {package_name}")
-                uid, name = get_user_info(cookie)
-                if uid:
-                    print(f"   👤 User: {name} | 🆔 ID: {uid}\n")
-                    found_accounts.append({
-                        "name": name,
-                        "user_id": uid,
-                        "package": package_name,
-                        "roblox_cookie": cookie,
-                    })
-                else:
-                    print("   ⚠️  Could not fetch user (invalid cookie?)\n")
-                break
-
-    if not found_accounts:
-        print("❌ No cookies found in installed apps.")
-        input("\nPress Enter to return...")
-        return
-
-    print(f"✅ Found {len(found_accounts)} account(s)!\n")
-
-    current_config = {}
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                current_config = json.load(f)
-        except:
-            pass
-
-    current_webhook = current_config.get("webhook_url", "")
-    print(f"Current Webhook: {current_webhook[:40]}..." if current_webhook else "Current Webhook: (kosong)")
-    webhook_input = clean_input("Enter Discord Webhook URL (Enter to keep): ")
-    final_webhook = webhook_input if webhook_input else current_webhook
-
-    ps_mode = clean_input("🔗 Use same PS Link for all? (Y/n): ").lower()
-    if not ps_mode: ps_mode = 'y'
-    global_link = "EDIT_LINK_IN_CONFIG_JSON"
-    if ps_mode == 'y':
-        val = clean_input("Paste PS Link (Enter to skip): ")
-        if val: global_link = val
-
-    new_accounts = []
-    for acc in found_accounts:
-        ps_link = global_link
-        if ps_mode != 'y':
-            print(f"\n👤 Account: {acc['name']} ({acc['package']})")
-            val = clean_input("   Paste PS Link for this account: ")
-            if val: ps_link = val
-        acc["ps_link"] = ps_link
-        new_accounts.append(acc)
-
-    def_interval  = current_config.get("check_interval", 35)
-    def_restart   = current_config.get("restart_delay", 15)
-    def_float     = current_config.get("floating_window", True)
-    def_mute      = current_config.get("auto_mute", True)
-    def_lowgfx    = current_config.get("auto_low_graphics", True)
-
-    i_val  = clean_input(f"Check Interval [keep {def_interval}s]: ")
-    r_val  = clean_input(f"Restart Delay  [keep {def_restart}s]: ")
-
-    fl_inp = clean_input(f"Floating window? (Y/n) [keep {'Y' if def_float else 'N'}]: ").lower()
-    do_float = (fl_inp != 'n') if fl_inp else def_float
-
-    mu_inp = clean_input(f"Auto mute Roblox? (Y/n) [keep {'Y' if def_mute else 'N'}]: ").lower()
-    do_mute = (mu_inp != 'n') if mu_inp else def_mute
-
-    gfx_inp = clean_input(f"Auto low grafik? (Y/n) [keep {'Y' if def_lowgfx else 'N'}]: ").lower()
-    do_lowgfx = (gfx_inp != 'n') if gfx_inp else def_lowgfx
-
-    final_config = {
-        "check_interval":    int(i_val) if i_val.isdigit() else def_interval,
-        "restart_delay":     int(r_val) if r_val.isdigit() else def_restart,
-        "webhook_url":       final_webhook,
-        "floating_window":   do_float,
-        "auto_mute":         do_mute,
-        "auto_low_graphics": do_lowgfx,
-        "accounts":          new_accounts,
-    }
-
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(final_config, f, indent=2)
-    print("\n✅ Config saved successfully!")
-    time.sleep(2)
-
-def edit_config():
-    if not os.path.exists(CONFIG_FILE):
-        print("No config file found! Please run 'Create Config' first.")
-        input("\nPress Enter to return...")
-        return
-    print("Opening config.json in nano...")
-    time.sleep(1)
-    os.system(f"nano {CONFIG_FILE}")
-
-# ══════════════════════════════════════════════════════
-#  RESOLUTION & GRID
-# ══════════════════════════════════════════════════════
-def get_current_resolution():
-    w, h = 1080, 2400
-    success, output = run_root_cmd("dumpsys window displays")
-    if success and output:
-        m = re.search(r"cur=(\d+)x(\d+)", output)
-        if m: return int(m.group(1)), int(m.group(2))
-    success, output = run_root_cmd("wm size")
-    if success and output:
-        m = re.search(r"(\d+)x(\d+)", output)
-        if m: return int(m.group(1)), int(m.group(2))
-    return w, h
-
-def get_grid_bounds(index, total, screen_w, screen_h):
-    cols = math.ceil(math.sqrt(total))
-    rows = math.ceil(total / cols)
-    if screen_w > screen_h:
-        while cols < rows:
-            cols += 1
-            rows = math.ceil(total / cols)
-    cell_w = screen_w // cols
-    cell_h = screen_h // rows
-    idx = index - 1
-    r   = idx // cols
-    c   = idx % cols
-    return f"{c*cell_w},{r*cell_h},{(c+1)*cell_w},{(r+1)*cell_h}"
-
-# ══════════════════════════════════════════════════════
-#  MEMORY INFO
-# ══════════════════════════════════════════════════════
-def get_memory_info():
-    try:
-        with open("/proc/meminfo", "r") as f:
-            content = f.read()
-        m_tot = re.search(r"MemTotal:\s+(\d+)\s+kB", content)
-        m_av  = re.search(r"MemAvailable:\s+(\d+)\s+kB", content)
-        if not m_av:
-            m_av = re.search(r"MemFree:\s+(\d+)\s+kB", content)
-        if m_tot and m_av:
-            tot = int(m_tot.group(1))
-            av  = int(m_av.group(1))
-            return f"{av//1024}MB", int((av / tot) * 100)
+        with open("/proc/meminfo") as f:
+            c = f.read()
+        mt = re.search(r"MemTotal:\s+(\d+)", c)
+        ma = re.search(r"MemAvailable:\s+(\d+)", c) or re.search(r"MemFree:\s+(\d+)", c)
+        if mt and ma:
+            tot, av = int(mt.group(1)), int(ma.group(1))
+            return f"{av//1024}MB", int(av/tot*100)
     except:
         pass
     return "N/A", 0
 
-# ══════════════════════════════════════════════════════
-#  FITUR BARU: FREEZE DETECTION
-# ══════════════════════════════════════════════════════
+def check_root():
+    try:
+        r = subprocess.run(["su", "-c", "id"], capture_output=True, timeout=5)
+        return r.returncode == 0
+    except:
+        return False
+
+# ══════════════════════════════════════════════════════════
+#  CONFIG
+# ══════════════════════════════════════════════════════════
+def load_cfg():
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE) as f:
+                return json.load(f)
+        except:
+            pass
+    return {
+        "packages": [],
+        "ps_links": {},
+        "check_interval": 35,
+        "restart_delay": 10,
+        "floating_window": True,
+        "auto_mute": True,
+        "auto_low_graphics": True,
+        "webhook_url": "",
+    }
+
+def save_cfg(cfg):
+    try:
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        print(f"{RE}Gagal simpan config: {e}{R}")
+
+# ══════════════════════════════════════════════════════════
+#  ROBLOX PACKAGE DETECTION — PURE DEVICE SCAN
+# ══════════════════════════════════════════════════════════
+def find_installed_pkgs():
+    """
+    Scan SEMUA package di device secara dinamis.
+    Tidak pakai hardcoded list — murni dari pm list packages.
+    Filter: nama package mengandung 'roblox'.
+    """
+    installed = []
+
+    # Cara 1: pm list packages (paling reliable)
+    ok, out = run_root("pm list packages -f")
+    if ok and out:
+        for line in out.splitlines():
+            line = line.strip()
+            # Format: package:/path/to/apk=com.package.name
+            if "=" in line:
+                pkg = line.split("=")[-1].strip()
+            else:
+                pkg = line.replace("package:", "").strip()
+            if "roblox" in pkg.lower() and pkg not in installed:
+                installed.append(pkg)
+
+    # Cara 2: pm list packages tanpa -f (fallback kalau cara 1 kosong)
+    if not installed:
+        ok2, out2 = run_root("pm list packages")
+        if ok2 and out2:
+            for line in out2.splitlines():
+                pkg = line.replace("package:", "").strip()
+                if "roblox" in pkg.lower() and pkg not in installed:
+                    installed.append(pkg)
+
+    # Cara 3: dumpsys package (fallback terakhir)
+    if not installed:
+        ok3, out3 = run_root("dumpsys package packages | grep 'packageName' | grep roblox")
+        if ok3 and out3:
+            for line in out3.splitlines():
+                m = re.search(r"packageName=(\S+)", line)
+                if m:
+                    pkg = m.group(1).strip()
+                    if "roblox" in pkg.lower() and pkg not in installed:
+                        installed.append(pkg)
+
+    return installed
+
+def is_running(pkg):
+    """Cek apakah package Roblox sedang running."""
+    ok, out = run_root(f"pidof {pkg}")
+    if ok and out.strip():
+        return True
+    ok, out = run_root(f"ps -A | grep {pkg}")
+    return ok and bool(out.strip())
+
+def get_pid(pkg):
+    ok, out = run_root(f"pidof {pkg}")
+    return out.strip() if ok and out.strip() else None
+
+# ══════════════════════════════════════════════════════════
+#  SISTEM DETEKSI — 4 METODE + FALLBACK OTOMATIS
+# ══════════════════════════════════════════════════════════
+#
+#  LEVEL 1 (Utama)  : dumpsys activity → cek Activity name
+#  LEVEL 2 (Backup) : network check    → cek koneksi aktif
+#  LEVEL 3 (Backup) : CPU/freeze       → cek app nganggur
+#  LEVEL 4 (Final)  : pidof only       → cek app hidup/mati
+#
+#  Kalau level 1 gagal → otomatis turun ke level 2, dst.
+# ══════════════════════════════════════════════════════════
+
+INGAME_ACTIVITIES = [
+    "GameActivity",
+    "RobloxGameActivity",
+    "NativeGameActivity",
+    "RobloxActivity",
+    "GameAppActivity",
+]
+
+NOTINGAME_ACTIVITIES = [
+    "MainActivity",
+    "SplashActivity",
+    "LoginActivity",
+    "LoadingActivity",
+    "HomeActivity",
+    "LaunchActivity",
+    "StartActivity",
+]
+
+# Track metode deteksi per package (auto-detect yang work)
+_detection_method = {}  # pkg → "activity" | "network" | "cpu" | "pidof"
+
+def get_current_activity(pkg):
+    """Ambil nama Activity aktif via dumpsys. Return None kalau gagal."""
+    cmds = [
+        ("dumpsys activity top 2>/dev/null | grep mResumedActivity", True),
+        (f"dumpsys activity activities 2>/dev/null | grep -A2 '{pkg}' | grep 'realActivity'", False),
+        (f"dumpsys window windows 2>/dev/null | grep -i 'mCurrentFocus.*{pkg}'", False),
+        (f"dumpsys window 2>/dev/null | grep -i 'mCurrentFocus.*{pkg}'", False),
+    ]
+    for cmd, filter_pkg in cmds:
+        ok, out = run_root(cmd, timeout=10)
+        if ok and out:
+            for line in out.splitlines():
+                if filter_pkg and pkg not in line:
+                    continue
+                m = re.search(r"\.([A-Za-z][A-Za-z0-9_]*Activity[A-Za-z0-9_]*)", line)
+                if m:
+                    return m.group(1)
+    return None
+
+def check_activity(pkg):
+    """
+    Level 1: Deteksi via dumpsys activity.
+    Return: (works: bool, in_game: bool, activity: str)
+    """
+    activity = get_current_activity(pkg)
+    if activity is None:
+        return False, False, None  # Method tidak work di HP ini
+
+    # Cek in-game
+    for a in INGAME_ACTIVITIES:
+        if a.lower() in activity.lower():
+            return True, True, activity
+
+    # Cek tidak in-game
+    for a in NOTINGAME_ACTIVITIES:
+        if a.lower() in activity.lower():
+            return True, False, activity
+
+    # Activity tidak dikenal — anggap in-game
+    return True, True, activity
+
+def check_network(pkg):
+    """
+    Level 2: Deteksi via koneksi network aktif.
+    Return: (works: bool, connected: bool)
+    """
+    pid = get_pid(pkg)
+    if not pid:
+        return True, False  # Method work, tapi app mati
+
+    first_pid = pid.strip().split()[0]
+
+    # Cara 1: ss
+    ok, out = run_root(f"ss -tp 2>/dev/null | grep '{first_pid}'", timeout=8)
+    if ok and out.strip():
+        established = [l for l in out.splitlines() if "ESTAB" in l]
+        return True, len(established) > 0
+
+    # Cara 2: netstat
+    ok2, out2 = run_root(f"netstat -tp 2>/dev/null | grep {pkg}", timeout=8)
+    if ok2 and "ESTABLISHED" in out2:
+        return True, True
+
+    # Cara 3: /proc/{pid}/net/tcp6
+    ok3, out3 = run_root(
+        f"cat /proc/{first_pid}/net/tcp6 2>/dev/null | grep -c '0A'",
+        timeout=8
+    )
+    if ok3 and out3.strip().isdigit():
+        return True, int(out3.strip()) > 0
+
+    # Cara 4: /proc/{pid}/net/tcp
+    ok4, out4 = run_root(
+        f"cat /proc/{first_pid}/net/tcp 2>/dev/null | grep -c '0A'",
+        timeout=8
+    )
+    if ok4 and out4.strip().isdigit():
+        return True, int(out4.strip()) > 0
+
+    return False, False  # Method tidak work
+
+def check_cpu_activity(pkg):
+    """
+    Level 3: Deteksi via CPU usage.
+    Return: (works: bool, active: bool)
+    App aktif = CPU > 0.5%
+    """
+    cpu = get_cpu_usage(pkg)
+    if cpu < 0:
+        return False, False  # Tidak bisa baca CPU
+    return True, cpu > 0.5
+
+def is_in_game(pkg):
+    """
+    Sistem deteksi utama dengan fallback otomatis.
+    Otomatis pilih metode terbaik yang work di HP ini.
+    Return: (in_game: bool, activity: str, method: str)
+    """
+    global _detection_method
+
+    # App harus running dulu
+    if not is_running(pkg):
+        return False, None, "pidof"
+
+    current_method = _detection_method.get(pkg, "auto")
+
+    # ── LEVEL 1: Activity check ────────────────────────
+    if current_method in ("auto", "activity"):
+        works, ingame, activity = check_activity(pkg)
+        if works:
+            _detection_method[pkg] = "activity"
+            log(f"{pkg}: Metode=activity | Activity={activity} | InGame={ingame}", "DEBUG")
+            return ingame, activity, "activity"
+        else:
+            if current_method == "activity":
+                # Metode ini tiba-tiba tidak work → reset ke auto
+                _detection_method[pkg] = "auto"
+            log(f"{pkg}: dumpsys activity tidak work → coba network", "WARN")
+
+    # ── LEVEL 2: Network check ─────────────────────────
+    if current_method in ("auto", "network"):
+        works, connected = check_network(pkg)
+        if works:
+            _detection_method[pkg] = "network"
+            log(f"{pkg}: Metode=network | Connected={connected}", "DEBUG")
+            return connected, "network-check", "network"
+        else:
+            if current_method == "network":
+                _detection_method[pkg] = "auto"
+            log(f"{pkg}: network check tidak work → coba CPU", "WARN")
+
+    # ── LEVEL 3: CPU activity check ────────────────────
+    if current_method in ("auto", "cpu"):
+        works, active = check_cpu_activity(pkg)
+        if works:
+            _detection_method[pkg] = "cpu"
+            log(f"{pkg}: Metode=cpu | Active={active}", "DEBUG")
+            return active, "cpu-check", "cpu"
+        else:
+            log(f"{pkg}: CPU check tidak work → fallback pidof", "WARN")
+
+    # ── LEVEL 4: Fallback — pidof saja ─────────────────
+    _detection_method[pkg] = "pidof"
+    running = is_running(pkg)
+    log(f"{pkg}: Metode=pidof (fallback) | Running={running}", "DEBUG")
+    return running, "pidof-only", "pidof"
+
+# ══════════════════════════════════════════════════════════
+#  NETWORK CHECK (standalone, dipakai is_in_game)
+# ══════════════════════════════════════════════════════════
+def has_active_connection(pkg):
+    """Wrapper untuk backward compat."""
+    works, connected = check_network(pkg)
+    return connected
+
+# ══════════════════════════════════════════════════════════
+#  FREEZE DETECTION via CPU
+# ══════════════════════════════════════════════════════════
 def get_cpu_usage(pkg):
-    """Ambil CPU% proses Roblox untuk freeze detection."""
-    ok, out = run_root_cmd(f"top -bn1 | grep {pkg}", timeout=10)
+    ok, out = run_root(f"top -bn1 | grep {pkg}", timeout=10)
     if ok and out:
         for line in out.splitlines():
             if pkg in line:
-                parts = line.split()
-                for p in parts:
+                for part in line.split():
                     try:
-                        val = float(p.replace('%', ''))
-                        if 0 <= val <= 100:
-                            return val
+                        v = float(part.replace('%', ''))
+                        if 0 <= v <= 100:
+                            return v
                     except:
                         pass
     return -1.0
 
 def is_frozen(pkg):
     """
-    Cek freeze: ambil 3 sample CPU tiap 3 detik.
-    Kalau rata-rata < 0.5% padahal app running → freeze.
+    Ambil 3 sample CPU tiap 3 detik.
+    Rata-rata < 0.5% padahal app running = freeze.
     """
     samples = []
     for _ in range(3):
-        cpu = get_cpu_usage(pkg)
-        if cpu >= 0:
-            samples.append(cpu)
+        v = get_cpu_usage(pkg)
+        if v >= 0:
+            samples.append(v)
         time.sleep(3)
-    if not samples:
-        return False
-    avg = sum(samples) / len(samples)
-    return avg < 0.5
+    return bool(samples) and (sum(samples) / len(samples)) < 0.5
 
-# ══════════════════════════════════════════════════════
-#  FITUR BARU: CLEAR CACHE AMAN
-# ══════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
+#  ROBLOX ACTIONS
+# ══════════════════════════════════════════════════════════
+def force_stop(pkg):
+    run_root(f"am force-stop {pkg}")
+    time.sleep(1)
+
 def clear_cache_safe(pkg):
-    """
-    Clear cache AMAN — TIDAK hapus login / data akun.
-    Hanya hapus folder cache, code_cache, dan user cache.
-    """
-    cmds = [
-        f"rm -rf /data/data/{pkg}/cache/",
-        f"rm -rf /data/data/{pkg}/code_cache/",
-        f"rm -rf /data/user/0/{pkg}/cache/*",
-    ]
-    for cmd in cmds:
-        run_root_cmd(cmd)
-    log_activity(f"Cache {pkg} dibersihkan (aman)", "INFO")
+    """Clear cache AMAN — tidak hapus data login."""
+    run_root(f"rm -rf /data/data/{pkg}/cache/")
+    run_root(f"rm -rf /data/data/{pkg}/code_cache/")
+    run_root(f"rm -rf /data/user/0/{pkg}/cache/*")
 
-# ══════════════════════════════════════════════════════
-#  FITUR BARU: COOKIE AUTO-REFRESH
-# ══════════════════════════════════════════════════════
-def refresh_cookie(old_cookie):
-    """
-    Coba refresh cookie Roblox yang expired.
-    Return cookie baru kalau berhasil, cookie lama kalau gagal.
-    """
-    try:
-        # Roblox kadang kirim cookie baru di header Set-Cookie saat request apapun
-        r = requests.get(
-            "https://www.roblox.com/",
-            cookies={".ROBLOSECURITY": old_cookie},
-            allow_redirects=True,
-            timeout=8
-        )
-        new_cookie = r.cookies.get(".ROBLOSECURITY")
-        if new_cookie and new_cookie != old_cookie:
-            log_activity("Cookie berhasil di-refresh", "INFO")
-            return new_cookie
-    except:
-        pass
-    return old_cookie
-
-def save_refreshed_cookie(user_id, new_cookie):
-    """Simpan cookie baru ke config.json."""
-    try:
-        with open(CONFIG_FILE, 'r') as f:
-            cfg = json.load(f)
-        for acc in cfg.get("accounts", []):
-            if str(acc.get("user_id")) == str(user_id):
-                acc["roblox_cookie"] = new_cookie
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(cfg, f, indent=2)
-    except:
-        pass
-
-# ══════════════════════════════════════════════════════
-#  FITUR BARU: PROTECT APP (anti-kill)
-# ══════════════════════════════════════════════════════
 def protect_app(pkg):
-    """Set oom_score_adj → -1000 supaya sistem tidak kill proses Roblox."""
-    ok, pid_out = run_root_cmd(f"pidof {pkg}")
-    if ok and pid_out.strip():
-        for pid in pid_out.strip().split():
-            run_root_cmd(f"echo -1000 > /proc/{pid}/oom_score_adj")
-            run_root_cmd(f"renice -19 -p {pid}")
+    """Set oom_score_adj -1000 supaya sistem tidak kill Roblox."""
+    ok, pid = run_root(f"pidof {pkg}")
+    if ok and pid.strip():
+        for p in pid.strip().split():
+            run_root(f"echo -1000 > /proc/{p}/oom_score_adj")
+            run_root(f"renice -19 -p {p}")
 
-# ══════════════════════════════════════════════════════
-#  FITUR BARU: AUTO MUTE SOUND ROBLOX
-# ══════════════════════════════════════════════════════
-def mute_roblox(pkg):
-    """
-    Mute audio Roblox dengan set volume stream MUSIC ke 0.
-    Tidak mute sistem / app lain.
-    """
-    # Cari UID package
-    ok, out = run_root_cmd(f"dumpsys package {pkg} | grep userId")
-    uid_app = None
-    if ok:
-        m = re.search(r"userId=(\d+)", out)
-        if m:
-            uid_app = m.group(1)
+def mute_roblox():
+    run_root("media volume --stream 3 --set 0 2>/dev/null || true")
 
-    # Turunkan volume via service call audio
-    # Stream 3 = STREAM_MUSIC (dipakai game)
-    run_root_cmd("media volume --stream 3 --set 0 2>/dev/null || true")
-    log_activity(f"Roblox muted (stream music = 0)", "INFO")
-
-# ══════════════════════════════════════════════════════
-#  FITUR BARU: AUTO LOW GRAFIK ROBLOX
-# ══════════════════════════════════════════════════════
 def set_low_graphics(pkg):
-    """
-    Set grafik Roblox ke minimum lewat SharedPreferences.
-    Cari file pref yang relevan dan patch GraphicsQualityLevel → 1.
-    """
-    pref_path = f"/data/data/{pkg}/shared_prefs"
-    ok, files = run_root_cmd(f"ls {pref_path} 2>/dev/null")
+    pref = f"/data/data/{pkg}/shared_prefs"
+    ok, files = run_root(f"ls {pref} 2>/dev/null")
     if not ok:
         return
-
-    patched = 0
     for fname in files.split():
-        fname = fname.strip()
-        if not fname.endswith(".xml"):
+        if not fname.strip().endswith(".xml"):
             continue
-        # Patch semua file pref yang punya GraphicsQualityLevel
-        ok2, content = run_root_cmd(f"cat {pref_path}/{fname}")
+        ok2, content = run_root(f"cat {pref}/{fname.strip()}")
         if ok2 and "GraphicsQualityLevel" in content:
-            run_root_cmd(
-                f"sed -i 's/<int name=\"GraphicsQualityLevel\" value=\"[0-9]*\""
-                f"/<int name=\"GraphicsQualityLevel\" value=\"1\"/g' {pref_path}/{fname}"
+            run_root(
+                f"sed -i 's/<int name=\"GraphicsQualityLevel\" value=\"[0-9]*\"/"
+                f"<int name=\"GraphicsQualityLevel\" value=\"1\"/g' {pref}/{fname.strip()}"
             )
-            patched += 1
 
-    if patched:
-        log_activity(f"Low grafik diterapkan ({patched} file pref)", "INFO")
-    else:
-        log_activity("GraphicsQualityLevel tidak ditemukan di pref (mungkin belum pernah buka settings)", "DEBUG")
+def get_resolution():
+    ok, out = run_root("dumpsys window displays")
+    if ok and out:
+        m = re.search(r"cur=(\d+)x(\d+)", out)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    ok, out = run_root("wm size")
+    if ok and out:
+        m = re.search(r"(\d+)x(\d+)", out)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    return 1080, 2400
 
-# ══════════════════════════════════════════════════════
-#  FITUR BARU: FLOATING WINDOW
-# ══════════════════════════════════════════════════════
-def set_floating_window(pkg, ps_link, index, total, sw, sh):
+def grid_bounds(idx, total, sw, sh):
+    cols = math.ceil(math.sqrt(total))
+    rows = math.ceil(total / cols)
+    cw, ch = sw // cols, sh // rows
+    r = (idx - 1) // cols
+    c = (idx - 1) % cols
+    return f"{c*cw},{r*ch},{(c+1)*cw},{(r+1)*ch}"
+
+def parse_launch_link(raw):
     """
-    Launch Roblox dalam mode floating (freeform) dengan grid bounds otomatis.
-    Layout grid menyesuaikan jumlah akun — mirip Kaeru Tools.
+    Auto konversi input user ke format link yang bisa dilaunching:
+    - Angka saja          → roblox://placeId=XXXX
+    - roblox://...        → langsung pakai
+    - https://roblox.com  → langsung pakai
+    - Link private server → langsung pakai
     """
-    bounds = get_grid_bounds(index, total, sw, sh)
-    flags  = f"--windowingMode 5 --bounds {bounds}"
+    raw = raw.strip()
 
-    # Coba launch dengan freeform mode
-    cmd1 = (
-        f'am start {flags} '
-        f'-n {pkg}/com.roblox.client.ActivityProtocolLaunch '
-        f'-a android.intent.action.VIEW -d "{ps_link}"'
-    )
-    ok1, o1 = run_root_cmd(cmd1)
-    if ok1 and "Error:" not in o1 and "does not exist" not in o1:
-        log_activity(f"Floating launch akun {index}: bounds={bounds}", "INFO")
-        return True, bounds
+    # Kalau angka doang → Game ID → konversi ke roblox URI
+    if raw.isdigit():
+        return f"roblox://placeId={raw}"
 
-    # Fallback: launch biasa pakai intent VIEW
-    cmd2 = f'am start -a android.intent.action.VIEW -d "{ps_link}" -p {pkg}'
-    ok2, _ = run_root_cmd(cmd2)
-    log_activity(f"Floating gagal, fallback normal launch akun {index}", "WARN")
-    return ok2, bounds
+    # Kalau sudah format roblox:// → langsung pakai
+    if raw.startswith("roblox://"):
+        return raw
 
-# ══════════════════════════════════════════════════════
-#  DRAW UI
-# ══════════════════════════════════════════════════════
-def draw_ui(accounts, sys_status, check_prog, next_wh=""):
+    # Kalau link https roblox games → extract place ID dan konversi
+    m = re.search(r"roblox\.com/games/(\d+)", raw)
+    if m:
+        place_id = m.group(1)
+        # Kalau ada privateServerLinkCode → pakai link aslinya
+        if "privateServerLinkCode" in raw:
+            return raw
+        return f"roblox://placeId={place_id}"
+
+    # Kalau link private server langsung → pakai apa adanya
+    return raw
+
+def launch_game(ps_link, pkg, bounds=None):
+    """
+    Launch Roblox ke PS Link / Game ID.
+    Auto detect format input → konversi → launch.
+    Coba 3 cara: ActivityProtocolLaunch → intent VIEW pkg → intent VIEW global.
+    """
+    link   = parse_launch_link(ps_link)
+    extras = f"--windowingMode 5 --bounds {bounds}" if bounds else ""
+    cmds   = [
+        f'am start {extras} -n {pkg}/com.roblox.client.ActivityProtocolLaunch -a android.intent.action.VIEW -d "{link}"',
+        f'am start {extras} -a android.intent.action.VIEW -d "{link}" -p {pkg}',
+        f'am start -a android.intent.action.VIEW -d "{link}"',
+    ]
+    for cmd in cmds:
+        ok, out = run_root(cmd)
+        if ok and "Error:" not in out and "does not exist" not in out:
+            return True
+    return False
+
+# ══════════════════════════════════════════════════════════
+#  BANNER MENU
+# ══════════════════════════════════════════════════════════
+MENU_ITEMS = [
+    ("1",  "Start Auto Rejoin"),
+    ("2",  "Detect & Set Packages Roblox"),
+    ("3",  "Set PS Link / Game ID (Semua Package)"),
+    ("4",  "Set PS Link per Package (Berbeda-beda)"),
+    ("5",  "Clear Config"),
+    ("6",  "List Config"),
+    ("7",  "Setup Webhook Discord"),
+    ("8",  "Set Interval Cek"),
+    ("9",  "Toggle Floating Window"),
+    ("10", "Toggle Auto Mute"),
+    ("11", "Toggle Low Grafik"),
+    ("12", "Diagnostic (Test Deteksi HP ini)"),
+    ("13", "Lihat Log Aktivitas"),
+    ("14", "Exit"),
+]
+
+def print_banner():
+    clear()
+    mem, mpct = get_memory()
+    cfg = load_cfg()
+    pkgs = cfg.get("packages", [])
+    print(f"{CY}╔{'═'*55}╗{R}")
+    print(f"{CY}║{MG}   YURXZ Rejoin v9  —  No Cookie Edition        {CY}║{R}")
+    print(f"{CY}║{GY}   by YURXZ  |  Detect via Package Process          {CY}║{R}")
+    print(f"{CY}║{GY}   RAM Free: {mem} ({mpct}%) | Packages: {len(pkgs)}{'':<18}{CY}║{R}")
+    print(f"{CY}╠{'═'*55}╣{R}")
+    print(f"{CY}║  {'No':<5} {'Menu':<47} ║{R}")
+    print(f"{CY}╠{'═'*55}╣{R}")
+    for num, label in MENU_ITEMS:
+        print(f"{CY}║  {YE}{num:<5}{WH}{label:<47}{CY} ║{R}")
+    print(f"{CY}╚{'═'*55}╝{R}")
+    print()
+
+# ══════════════════════════════════════════════════════════
+#  DRAW UI MONITORING
+# ══════════════════════════════════════════════════════════
+def draw_ui(accounts, sys_status, prog="", nxt_wh=""):
     sys.stdout.write("\033[2J\033[H\033[?25h")
-    C_RES = "\033[0m"; C_CYA = "\033[36m"; C_GRE = "\033[32m"
-    C_YEL = "\033[33m"; C_RED = "\033[31m"; C_GRY = "\033[90m"
-    C_MGA = "\033[35m"
-
-    mem, m_pct = get_memory_info()
-    cols = 68; c1 = 36; c2 = cols - c1 - 5
+    mem, mpct = get_memory()
+    W = 68; c1 = 34; c2 = W - c1 - 5
 
     def trunc(s, l):
-        s = str(s).replace('\n', '').replace('\r', '')
+        s = str(s).replace('\n','').replace('\r','')
         return s[:l-1] + "." if len(s) > l else s
 
-    def sep(l, m, r, c='─'):
-        sys.stdout.write(f"{C_CYA}{l}{c*(c1+1)}{m}{c*(c2+1)}{r}{C_RES}\n")
+    def sep(l, m, rv, c='─'):
+        sys.stdout.write(f"{CY}{l}{c*(c1+1)}{m}{c*(c2+1)}{rv}{R}\n")
 
-    def row(t1, t2, col=C_RES):
+    def row(t1, t2, col=R):
         sys.stdout.write(
-            f"{C_CYA}│{C_RES} {trunc(t1, c1):<{c1}} "
-            f"{C_CYA}│{C_RES} {col}{trunc(t2, c2):<{c2}}{C_RES} {C_CYA}│{C_RES}\n"
+            f"{CY}│{R} {trunc(t1,c1):<{c1}} "
+            f"{CY}│{R} {col}{trunc(t2,c2):<{c2}}{R} {CY}│{R}\n"
         )
 
-    # Header
-    sys.stdout.write(f"\n{C_MGA}  🎮 ROBLOX AUTO REJOIN  by YURXZ{C_RES}\n\n")
-    sep('┌', '┬', '┐')
-    row("PACKAGE / NAMA", "STATUS")
-    sep('├', '┼', '┤')
+    sys.stdout.write(f"\n{MG}  🎮 YURXZ Rejoin v9  |  No Cookie  |  by YURXZ{R}\n\n")
+    sep('┌','┬','┐')
+    row("INFO", "STATUS")
+    sep('├','┼','┤')
 
-    # System rows
-    sys_txt = check_prog if check_prog else sys_status
-    if next_wh: sys_txt += f" | {next_wh}"
-    mode_txt = ("PREVENTIF " if ARGS.preventif else "") + ("LOW-PERF" if ARGS.low else "")
-    row("⚙  System", sys_txt or "Idle", C_YEL)
-    row("💾 Memory",  f"Free: {mem} ({m_pct}%)", C_GRY)
-    if mode_txt:
-        row("🔧 Mode", mode_txt.strip(), C_GRY)
-    sep('├', '┼', '┤')
+    st_txt = (prog + " " if prog else "") + (sys_status or "Idle")
+    if nxt_wh: st_txt += f" | {nxt_wh}"
+    row("⚙  System", st_txt, YE)
+    row("💾 Memory", f"Free: {mem} ({mpct}%)", GY)
+
+    mode = []
+    if ARGS.preventif: mode.append("PREVENTIF")
+    if ARGS.low:       mode.append("LOW-PERF")
+    if mode: row("🔧 Mode", " | ".join(mode), GY)
+
+    sep('├','┼','┤')
+    row("PACKAGE", "STATUS")
+    sep('├','┼','┤')
 
     for a in accounts:
-        st  = a.get('status', 'Unknown')
-        col = C_GRE
-        if any(x in st for x in ['Restarting', 'Launching', 'Waiting', 'Init', 'Cache', 'Mute', 'Grafik']):
-            col = C_YEL
-        elif any(x in st for x in ['Error', 'Failed', 'Crash', 'Freeze']):
-            col = C_RED
-        elif any(x in st for x in ['Checking', 'Idle']):
-            col = C_GRY
-        row(f"  {a.get('package','?')} ({a.get('name','?')})", st, col)
+        st  = a.get("status", "?")
+        mtd = a.get("method", "auto")
+        mtd_icon = {
+            "activity": "📋",
+            "network":  "🌐",
+            "cpu":      "💻",
+            "pidof":    "🔍",
+        }.get(mtd, "⚙️")
+        col = GR
+        if any(x in st for x in ["Restart","Launch","Wait","Cache","Mute","Grafik","Init","Stop","Loading"]):
+            col = YE
+        elif any(x in st for x in ["Error","Failed","Crash","Freeze","mati","disconnect","putus"]):
+            col = RE
+        elif any(x in st for x in ["Checking","Idle","Pending","Detect","Cek"]):
+            col = GY
+        row(f"  {mtd_icon} {a.get('pkg','?')}", st, col)
 
-    sep('└', '┴', '┘')
-    sys.stdout.write(f"\n{C_GRY}  [Ctrl+C untuk berhenti]{C_RES}\n")
+    sep('└','┴','┘')
+    sys.stdout.write(f"\n{GY}  [Ctrl+C untuk berhenti]{R}\n")
     sys.stdout.flush()
 
-# ══════════════════════════════════════════════════════
-#  APP RUNNER — CEK APP & PRESENCE
-# ══════════════════════════════════════════════════════
-def is_roblox_running(pkg):
-    ok, out = run_root_cmd(f"pidof {pkg}")
-    if ok and out.strip(): return True
-    ok, out = run_root_cmd(f"ps -A | grep {pkg}")
-    return ok and bool(out.strip())
-
-def check_user_presence(uid, cookie):
-    try:
-        r = requests.post(
-            "https://presence.roblox.com/v1/presence/users",
-            json={'userIds': [uid]},
-            cookies={".ROBLOSECURITY": cookie} if cookie else {},
-            headers={'User-Agent': 'Mozilla/5.0'},
-            timeout=5
-        )
-        if r.status_code == 200 and r.json().get('userPresences'):
-            p = r.json()['userPresences'][0]
-            return (p.get('userPresenceType') == 2), p.get('gameId')
-    except:
-        pass
-    return True, None
-
-# ══════════════════════════════════════════════════════
-#  LAUNCH PS LINK (dengan atau tanpa floating)
-# ══════════════════════════════════════════════════════
-def open_ps_link(link, pkg, bounds=None):
-    def try_launch(extras=""):
-        c1 = (
-            f'am start {extras} -n {pkg}/com.roblox.client.ActivityProtocolLaunch '
-            f'-a android.intent.action.VIEW -d "{link}"'
-        )
-        ok1, o1 = run_root_cmd(c1)
-        if ok1 and "Error:" not in o1 and "does not exist" not in o1:
-            return True
-        c2 = f'am start {extras} -a android.intent.action.VIEW -d "{link}" -p {pkg}'
-        ok2, o2 = run_root_cmd(c2)
-        return ok2 and "Error:" not in o2 and "does not exist" not in o2
-
-    if bounds:
-        if try_launch(f"--windowingMode 5 --bounds {bounds}"):
-            return True
-    return try_launch("")
-
-# ══════════════════════════════════════════════════════
-#  WEBHOOK + SCREENSHOT
-# ══════════════════════════════════════════════════════
-def send_webhook(webhook_url, accounts, title="📊 Status Update", color=3447003):
-    if not webhook_url:
-        return
-
-    local_img = os.path.join(os.getcwd(), "screen.png")
-    temp_img  = "/data/local/tmp/screen.png"
-    ok, _     = run_root_cmd(
-        f"screencap -p {temp_img} && cp {temp_img} {local_img} && chmod 666 {local_img}"
-    )
-
-    embed_fields = []
-    for a in accounts:
-        st    = a.get('status', '?')
-        emoji = "🟢" if "Online" in st else ("🔴" if any(x in st for x in ["Error","Crash","Failed"]) else "🟡")
-        embed_fields.append({
-            "name":   f"{emoji} {a.get('name','?')} | {a.get('package','?')}",
-            "value":  f"**Status:** {st}",
-            "inline": False,
-        })
-
-    payload = {
-        "embeds": [{
-            "title":     title,
-            "color":     color,
-            "fields":    embed_fields,
-            "footer":    {"text": f"YURXZ Auto Rejoin • {time.strftime('%d/%m/%Y %H:%M:%S')}"},
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        }]
-    }
-
-    files    = {}
-    f_handle = None
-    if ok and os.path.exists(local_img):
-        f_handle = open(local_img, "rb")
-        files["file"] = ("screen.png", f_handle, "image/png")
-        payload["embeds"][0]["image"] = {"url": "attachment://screen.png"}
-
-    try:
-        if files:
-            requests.post(
-                webhook_url,
-                data={"payload_json": json.dumps(payload)},
-                files=files, timeout=15
-            )
-        else:
-            requests.post(webhook_url, json=payload, timeout=10)
-        log_activity("Webhook terkirim", "INFO")
-    except Exception as e:
-        log_activity(f"Webhook gagal: {e}", "WARN")
-    finally:
-        if f_handle:
-            f_handle.close()
-
-# ══════════════════════════════════════════════════════
-#  MAIN REJOIN LOOP
-# ══════════════════════════════════════════════════════
-def start_rejoin_app():
-    if not os.path.exists(CONFIG_FILE):
-        print("Config file not found! Jalankan 'Create Config' dulu.")
-        input("\nPress Enter to return...")
-        return
-
+# ══════════════════════════════════════════════════════════
+#  MENU 1 — START AUTO REJOIN (tanpa cookie)
+# ══════════════════════════════════════════════════════════
+def menu_start_rejoin():
     if not check_root():
-        print("Root access required!")
-        input("\nPress Enter to return...")
-        return
+        print(f"{RE}Root access required!{R}")
+        input("\nEnter..."); return
 
-    with open(CONFIG_FILE, 'r') as f:
-        config = json.load(f)
+    cfg  = load_cfg()
+    pkgs = cfg.get("packages", [])
 
-    accounts_cfg = config.get("accounts", [])
-    if not accounts_cfg:
-        print("No accounts configured.")
-        time.sleep(2)
-        return
+    # Auto detect kalau belum ada
+    if not pkgs:
+        print(f"{YE}Package belum diset, auto detecting...{R}")
+        pkgs = find_installed_pkgs()
+        if not pkgs:
+            print(f"{RE}Tidak ada package Roblox ditemukan!{R}")
+            input("\nEnter..."); return
+        cfg["packages"] = pkgs
+        save_cfg(cfg)
 
-    clear_screen()
-    run_root_cmd("setenforce 0")   # Matikan SELinux enforce sementara
+    ps_links    = cfg.get("ps_links", {})
+    global_link = cfg.get("global_ps_link", "")
 
-    # Ambil setting dari config & args
-    interval      = 20 if ARGS.preventif else config.get("check_interval", 35)
-    restart_delay = config.get("restart_delay", 15)
-    wh_url        = config.get("webhook_url", "")
-    do_float      = config.get("floating_window", True)
-    do_mute       = config.get("auto_mute", True)
-    do_lowgfx     = config.get("auto_low_graphics", True)
+    # Pastikan semua package punya PS link
+    missing = [p for p in pkgs if not ps_links.get(p) and not global_link]
+    if missing:
+        print(f"{RE}PS Link belum diset untuk:{R}")
+        for m in missing: print(f"  - {m}")
+        print(f"{YE}Gunakan Menu 3 atau 4 untuk set PS Link.{R}")
+        input("\nEnter..."); return
+
+    interval      = 20 if ARGS.preventif else cfg.get("check_interval", 35)
+    restart_delay = cfg.get("restart_delay", 10)
+    do_float      = cfg.get("floating_window", True)
+    do_mute       = cfg.get("auto_mute", True)
+    do_lowgfx     = cfg.get("auto_low_graphics", True)
+    wh_url        = cfg.get("webhook_url", "")
 
     if ARGS.low:
-        interval = max(interval, 50)  # hemat CPU: tambah jeda
+        interval = max(interval, 50)
 
-    sw, sh = get_current_resolution()
-    tot    = len(accounts_cfg)
+    sw, sh = get_resolution()
+    tot    = len(pkgs)
 
+    # Build daftar akun monitoring
     accounts = []
-    for i, a in enumerate(accounts_cfg):
+    for i, pkg in enumerate(pkgs):
+        link = ps_links.get(pkg) or global_link
         accounts.append({
-            'index':          i + 1,
-            'name':           a.get('name', f"User {a.get('user_id')}"),
-            'user_id':        a.get('user_id'),
-            'package':        a.get('package'),
-            'cookie':         a.get('roblox_cookie'),
-            'ps_link':        a.get('ps_link'),
-            'status':         'Pending Start',
-            'expected_game':  None,
-            'freeze_count':   0,
+            "index":         i + 1,
+            "pkg":           pkg,
+            "ps_link":       link,
+            "status":        "Pending",
+            "freeze_count":  0,
+            "rejoin_count":  0,
         })
 
-    draw_ui(accounts, "Starting Up...", "")
+    run_root("setenforce 0")
 
-    # ── LAUNCH AWAL ─────────────────────────────────────
-    for i, acc in enumerate(accounts):
-        pkg = acc['package']
-        acc['status'] = 'Force stop...'
-        draw_ui(accounts, "Launching Accounts", f"[{i+1}/{tot}]")
+    # ── Launch awal semua package ─────────────────────────
+    for i, a in enumerate(accounts):
+        pkg  = a["pkg"]
+        link = a["ps_link"]
 
-        run_root_cmd(f"am force-stop {pkg}")
-        time.sleep(1)
+        a["status"] = "Force stop..."
+        draw_ui(accounts, "Launching", f"[{i+1}/{tot}]")
+        force_stop(pkg)
 
-        # Clear cache AMAN sebelum launch
-        acc['status'] = 'Clear cache...'
-        draw_ui(accounts, "Launching Accounts", f"[{i+1}/{tot}]")
+        a["status"] = "Clear cache..."
+        draw_ui(accounts, "Launching", f"[{i+1}/{tot}]")
         clear_cache_safe(pkg)
 
-        # Launch dengan / tanpa floating
-        acc['status'] = 'Launching...'
-        draw_ui(accounts, "Launching Accounts", f"[{i+1}/{tot}]")
+        a["status"] = "Launching..."
+        draw_ui(accounts, "Launching", f"[{i+1}/{tot}]")
+        bounds = grid_bounds(a["index"], tot, sw, sh) if do_float else None
+        ok = launch_game(link, pkg, bounds)
 
-        if do_float:
-            bounds = get_grid_bounds(acc['index'], tot, sw, sh)
-            success = open_ps_link(acc['ps_link'], pkg, bounds)
-        else:
-            bounds  = None
-            success = open_ps_link(acc['ps_link'], pkg)
-
-        acc['status'] = 'Launched ✓' if success else 'Launch Failed ✗'
-
-        if success:
-            # Mute & low grafik langsung setelah launch
+        if ok:
+            a["status"] = "Launched ✓"
             if do_mute:
-                acc['status'] = 'Muting...'
-                draw_ui(accounts, "Launching Accounts", f"[{i+1}/{tot}]")
-                mute_roblox(pkg)
-
+                a["status"] = "Muting..."
+                draw_ui(accounts, "Launching", f"[{i+1}/{tot}]")
+                mute_roblox()
             if do_lowgfx:
-                acc['status'] = 'Low grafik...'
-                draw_ui(accounts, "Launching Accounts", f"[{i+1}/{tot}]")
+                a["status"] = "Set low grafik..."
+                draw_ui(accounts, "Launching", f"[{i+1}/{tot}]")
                 set_low_graphics(pkg)
-
-            # Protect anti-kill
             time.sleep(3)
             protect_app(pkg)
+            log(f"Launch awal {pkg} → OK", "INFO")
+        else:
+            a["status"] = "Launch Failed ✗"
+            log(f"Launch awal {pkg} → GAGAL", "WARN")
 
         if i < tot - 1:
             for t in range(restart_delay, 0, -1):
-                draw_ui(accounts, "Launching Accounts", f"Next in {t}s")
+                draw_ui(accounts, "Launching", f"Next in {t}s")
                 time.sleep(1)
 
-    # Tunggu semua load
-    for t in range(15, 0, -1):
+    # Tunggu game load
+    for t in range(20, 0, -1):
         draw_ui(accounts, "Initializing", f"Wait {t}s")
         time.sleep(1)
 
-    # Presence awal
     for a in accounts:
-        ingame, gid       = check_user_presence(a['user_id'], a['cookie'])
-        a['expected_game'] = gid
-        a['status']        = "Online ✅" if ingame else "Waiting Game..."
+        a["status"] = "Running ✅" if is_running(a["pkg"]) else "Not Running ⚠️"
 
     last_wh = time.time()
 
-    # ── MONITORING LOOP ─────────────────────────────────
+    # ── Monitoring loop ───────────────────────────────────
     try:
         while True:
             nxt_wh = ""
             if wh_url:
-                wh_diff = int(600 - (time.time() - last_wh))
-                if wh_diff <= 0:
-                    draw_ui(accounts, "Webhook", "Sending Update...")
-                    send_webhook(wh_url, accounts)
+                diff = int(600 - (time.time() - last_wh))
+                if diff <= 0:
+                    _send_webhook_nocookie(wh_url, accounts)
                     last_wh = time.time()
-                    wh_diff = 600
-                nxt_wh = f"WH {wh_diff//60}m"
+                    diff = 600
+                nxt_wh = f"WH {diff//60}m"
 
             for i, a in enumerate(accounts):
                 draw_ui(accounts, "Monitoring", f"Check [{i+1}/{tot}]", nxt_wh)
-                pkg  = a['package']
-                uid  = a['user_id']
-                cook = a['cookie']
-
+                pkg  = a["pkg"]
+                link = a["ps_link"]
                 needs_rejoin = False
-                reason       = ""
+                reason = ""
 
-                # ── 1. Cek app running ─────────────────
-                if not is_roblox_running(pkg):
+                # ══ CEK 1: App masih running? ════════════
+                if not is_running(pkg):
                     needs_rejoin = True
-                    reason       = "App closed"
+                    reason = "App mati / crash"
+                    a["method"] = "pidof"
 
                 else:
-                    # ── 2. Freeze detection ───────────
-                    if not ARGS.low:
-                        a['status'] = f"Checking freeze..."
-                        draw_ui(accounts, "Monitoring", f"Check [{i+1}/{tot}]", nxt_wh)
-                        if is_frozen(pkg):
-                            a['freeze_count'] += 1
-                            if a['freeze_count'] >= 2:
-                                needs_rejoin       = True
-                                reason             = "Freeze terdeteksi"
-                                a['freeze_count']  = 0
-                            else:
-                                a['status'] = f"⚠️ Mungkin freeze ({a['freeze_count']}/2)"
-                                continue
-                        else:
-                            a['freeze_count'] = 0
+                    # ══ CEK 2-4: Deteksi dengan fallback ═
+                    a["status"] = "Detecting..."
+                    draw_ui(accounts, "Monitoring", f"Check [{i+1}/{tot}]", nxt_wh)
 
-                    # ── 3. Cookie check ───────────────
-                    uid_check, _ = get_user_info(cook)
-                    if uid_check is None:
-                        log_activity(f"{a['name']}: Cookie expired, refresh...", "WARN")
-                        a['status'] = "Cookie refresh..."
-                        draw_ui(accounts, "Monitoring", f"Cookie [{i+1}/{tot}]", nxt_wh)
-                        new_cook = refresh_cookie(cook)
-                        uid_check, _ = get_user_info(new_cook)
-                        if uid_check:
-                            a['cookie'] = new_cook
-                            save_refreshed_cookie(uid, new_cook)
-                            log_activity(f"{a['name']}: Cookie berhasil di-refresh", "INFO")
-                            a['status'] = "Cookie refreshed ✅"
+                    ingame, activity, method = is_in_game(pkg)
+                    a["method"] = method  # Tampilkan metode di UI
+
+                    if not ingame:
+                        # Toleransi loading / transisi
+                        if a.get("loading_count", 0) < 3:
+                            a["loading_count"] = a.get("loading_count", 0) + 1
+                            a["status"] = f"⏳ Transisi? ({a['loading_count']}/3)"
                             continue
                         else:
                             needs_rejoin = True
-                            reason       = "Cookie expired (gagal refresh)"
+                            reason = f"Tidak in-game ({activity or method})"
+                            a["loading_count"] = 0
                     else:
-                        # ── 4. Presence check ─────────
-                        ingame, cg = check_user_presence(uid, cook)
-                        if not ingame:
-                            needs_rejoin = True
-                            reason       = "Not in game"
-                        elif a['expected_game'] and cg and str(cg) != str(a['expected_game']):
-                            needs_rejoin = True
-                            reason       = "Server switch"
+                        a["loading_count"] = 0
+                        protect_app(pkg)
+
+                        # Status sesuai metode yang dipakai
+                        if method == "activity":
+                            a["status"] = f"In-game ✅ | {activity}"
+                        elif method == "network":
+                            a["status"] = "In-game ✅ | koneksi aktif"
+                        elif method == "cpu":
+                            a["status"] = "Running ✅ | CPU aktif"
                         else:
-                            if cg: a['expected_game'] = cg
-                            a['status'] = "Online ✅"
-                            protect_app(pkg)
+                            a["status"] = "Running ✅ | pidof"
 
-                # ── REJOIN ────────────────────────────
+                # ── Rejoin ────────────────────────────────
                 if needs_rejoin:
-                    log_activity(f"{a['name']}: {reason} → Rejoin!", "WARN")
-                    a['status'] = f"⚠️ {reason}"
+                    a["rejoin_count"] += 1
+                    log(f"{pkg}: {reason} → Rejoin #{a['rejoin_count']}", "WARN")
+                    a["status"] = f"⚠️ {reason}"
+                    draw_ui(accounts, "Monitoring", f"Rejoin {pkg}", nxt_wh)
 
+                    # Webhook notif
                     if wh_url:
-                        draw_ui(accounts, "Webhook", f"Crash: {a['name']}")
-                        send_webhook(wh_url, accounts,
-                                     f"⚠️ Disconnect: {a['name']}", 15158332)
+                        _send_webhook_nocookie(wh_url, accounts,
+                                               f"⚠️ Disconnect: {pkg}", 15158332)
 
-                    # Force stop
-                    a['status'] = "Force stop..."
-                    draw_ui(accounts, "Monitoring", f"Rejoin {a['name']}", nxt_wh)
-                    run_root_cmd(f"am force-stop {pkg}")
-                    time.sleep(2)
+                    # Stop → clear → launch
+                    a["status"] = "Force stop..."
+                    draw_ui(accounts, "Monitoring", f"Rejoin {pkg}", nxt_wh)
+                    force_stop(pkg)
 
-                    # Clear cache AMAN
-                    a['status'] = "Clear cache..."
-                    draw_ui(accounts, "Monitoring", f"Rejoin {a['name']}", nxt_wh)
+                    a["status"] = "Clear cache..."
+                    draw_ui(accounts, "Monitoring", f"Rejoin {pkg}", nxt_wh)
                     clear_cache_safe(pkg)
 
-                    # Relaunch
-                    a['status'] = "Relaunching..."
-                    draw_ui(accounts, "Monitoring", f"Rejoin {a['name']}", nxt_wh)
-                    if do_float:
-                        bounds = get_grid_bounds(a['index'], tot, sw, sh)
-                        open_ps_link(a['ps_link'], pkg, bounds)
-                    else:
-                        open_ps_link(a['ps_link'], pkg)
+                    a["status"] = "Relaunching..."
+                    draw_ui(accounts, "Monitoring", f"Rejoin {pkg}", nxt_wh)
+                    bounds = grid_bounds(a["index"], tot, sw, sh) if do_float else None
+                    launch_game(link, pkg, bounds)
 
-                    # Mute & low grafik ulang setelah rejoin
                     time.sleep(5)
-                    if do_mute:   mute_roblox(pkg)
+                    if do_mute:   mute_roblox()
                     if do_lowgfx: set_low_graphics(pkg)
                     protect_app(pkg)
 
+                    # Countdown wait start
                     for t in range(25, 0, -1):
-                        a['status'] = f"Wait Start ({t}s)"
+                        a["status"] = f"Wait start ({t}s)"
                         draw_ui(accounts, "Monitoring", "Wait Launch", nxt_wh)
                         time.sleep(1)
 
-                    a['status']        = "Online ✅ (rejoined)"
-                    a['expected_game'] = None
+                    a["status"] = f"Running ✅ (rejoin #{a['rejoin_count']})"
+                    log(f"{pkg}: Rejoin #{a['rejoin_count']} selesai", "INFO")
 
                     if wh_url:
-                        send_webhook(wh_url, accounts,
-                                     f"✅ Rejoin berhasil: {a['name']}", 3066993)
+                        _send_webhook_nocookie(wh_url, accounts,
+                                               f"✅ Rejoin OK: {pkg}", 3066993)
 
             # Simpan status
             try:
-                with open("status.json", "w") as f:
-                    json.dump([{'name': x['name'], 'status': x['status']}
-                               for x in accounts], f)
+                with open(STATUS_FILE, "w") as f:
+                    json.dump([{"pkg": x["pkg"], "status": x["status"],
+                                "rejoin": x["rejoin_count"]} for x in accounts], f)
             except:
                 pass
 
@@ -949,55 +826,395 @@ def start_rejoin_app():
                 time.sleep(step)
 
     except KeyboardInterrupt:
-        pass
-    finally:
         sys.stdout.write("\033[?25h")
-        print("\n\033[33m[!] Dihentikan.\033[0m\n")
+        print(f"\n{YE}[!] Dihentikan.{R}\n")
 
-# ══════════════════════════════════════════════════════
-#  MAIN MENU
-# ══════════════════════════════════════════════════════
+def _send_webhook_nocookie(url, accounts, title="📊 Status Update", color=3447003):
+    try:
+        import requests as req
+    except:
+        return
+    fields = []
+    for a in accounts:
+        st = a.get("status","?")
+        em = "🟢" if "Running" in st else ("🔴" if any(x in st for x in ["Error","Crash","Failed","mati","freeze"]) else "🟡")
+        fields.append({
+            "name":   f"{em} {a.get('pkg','?')}",
+            "value":  f"**Status:** {st} | Rejoin: {a.get('rejoin_count',0)}x",
+            "inline": False,
+        })
+    payload = {"embeds":[{
+        "title": title, "color": color, "fields": fields,
+        "footer": {"text": f"YURXZ v9 No-Cookie • {time.strftime('%d/%m/%Y %H:%M:%S')}"},
+    }]}
+    try:
+        req.post(url, json=payload, timeout=10)
+    except:
+        pass
+
+# ══════════════════════════════════════════════════════════
+#  MENU 2 — DETECT & SET PACKAGES
+# ══════════════════════════════════════════════════════════
+def menu_detect_packages():
+    cfg = load_cfg()
+    print(f"\n{CY}[ Detect & Set Packages Roblox ]{R}")
+    print(f"{YE}Scanning device...{R}\n")
+    found = find_installed_pkgs()
+    if not found:
+        print(f"{RE}Tidak ada package Roblox ditemukan!{R}")
+        input("\nEnter..."); return
+    print(f"{GR}Package ditemukan:{R}")
+    for p in found:
+        ok, out = run_root(f"dumpsys package {p} | grep versionName")
+        ver = out.strip().replace("versionName=","").strip() if ok and out.strip() else "?"
+        print(f"  {GR}✓{R} {p}  {GY}(v{ver}){R}")
+    cfg["packages"] = found
+    save_cfg(cfg)
+    print(f"\n{GR}✓ {len(found)} package tersimpan ke config!{R}")
+    input("\nEnter...")
+
+# ══════════════════════════════════════════════════════════
+#  MENU 3 — SET PS LINK / GAME ID (SEMUA PACKAGE)
+# ══════════════════════════════════════════════════════════
+def menu_set_global_ps():
+    cfg = load_cfg()
+    print(f"\n{CY}[ Set PS Link / Game ID untuk Semua Package ]{R}")
+    print(f"{GY}{'─'*50}{R}")
+    print(f"{GY}Format yang bisa diinput:{R}")
+    print(f"  {WH}1. Game ID biasa     {GY}→ {GR}995679412{R}")
+    print(f"  {WH}2. Roblox URI        {GY}→ {GR}roblox://placeId=995679412{R}")
+    print(f"  {WH}3. Link game Roblox  {GY}→ {GR}https://www.roblox.com/games/995679412/...{R}")
+    print(f"  {WH}4. Private Server    {GY}→ {GR}https://www.roblox.com/games/...?privateServerLinkCode=xxx{R}")
+    print(f"{GY}{'─'*50}{R}")
+    current = cfg.get("global_ps_link","")
+    if current:
+        parsed = parse_launch_link(current)
+        print(f"{GY}Saat ini : {current[:55]}{R}")
+        print(f"{GY}Dikonversi: {parsed[:55]}{R}")
+    print()
+    link = inp(f"{YE}Masukkan PS Link / Game ID: {R}")
+    if not link:
+        print(f"{RE}Kosong!{R}"); input("\nEnter..."); return
+    parsed = parse_launch_link(link)
+    print(f"\n{GY}Input    : {link[:55]}{R}")
+    print(f"{GR}Dikonversi: {parsed[:55]}{R}")
+    cfg["global_ps_link"] = link
+    pkgs     = cfg.get("packages", find_installed_pkgs())
+    ps_links = cfg.get("ps_links", {})
+    for pkg in pkgs:
+        ps_links[pkg] = link
+        print(f"  {GR}✓{R} {pkg}")
+    cfg["ps_links"] = ps_links
+    save_cfg(cfg)
+    print(f"\n{GR}✓ Tersimpan untuk semua package!{R}")
+    input("\nEnter...")
+
+# ══════════════════════════════════════════════════════════
+#  MENU 4 — SET PS LINK PER PACKAGE
+# ══════════════════════════════════════════════════════════
+def menu_set_per_pkg_ps():
+    cfg  = load_cfg()
+    pkgs = cfg.get("packages", find_installed_pkgs())
+    print(f"\n{CY}[ Set PS Link / Game ID per Package ]{R}")
+    print(f"{GY}{'─'*50}{R}")
+    print(f"{GY}Format yang bisa diinput:{R}")
+    print(f"  {WH}1. Game ID biasa  {GY}→ {GR}995679412{R}")
+    print(f"  {WH}2. Roblox URI     {GY}→ {GR}roblox://placeId=995679412{R}")
+    print(f"  {WH}3. Link game      {GY}→ {GR}https://www.roblox.com/games/...{R}")
+    print(f"  {WH}4. Private Server {GY}→ {GR}https://www.roblox.com/...?privateServerLinkCode=xxx{R}")
+    print(f"{GY}{'─'*50}{R}\n")
+    ps_links = cfg.get("ps_links", {})
+    for pkg in pkgs:
+        current = ps_links.get(pkg,"")
+        print(f"{CY}▶ {pkg}{R}")
+        if current:
+            print(f"  {GY}Saat ini: {current[:55]}{R}")
+        val = inp(f"  {YE}Input baru (Enter skip): {R}")
+        if val:
+            parsed = parse_launch_link(val)
+            print(f"  {GR}✓ Dikonversi → {parsed[:50]}{R}")
+            ps_links[pkg] = val
+        print()
+    cfg["ps_links"] = ps_links
+    cfg["packages"] = pkgs
+    save_cfg(cfg)
+    print(f"{GR}✓ PS Link per-package tersimpan!{R}")
+    input("\nEnter...")
+
+# ══════════════════════════════════════════════════════════
+#  MENU 5 — CLEAR CONFIG
+# ══════════════════════════════════════════════════════════
+def menu_clear_config():
+    cfg = load_cfg()
+    print(f"\n{CY}[ Clear Config ]{R}")
+    print("  1. Clear PS Links saja")
+    print("  2. Clear Packages saja")
+    print("  3. Clear semua (reset total)")
+    print("  4. Batal")
+    c = inp(f"{YE}Pilih: {R}")
+    if c == "1":
+        cfg["ps_links"] = {}; cfg["global_ps_link"] = ""
+        save_cfg(cfg); print(f"{GR}✓ PS Links dihapus.{R}")
+    elif c == "2":
+        cfg["packages"] = []
+        save_cfg(cfg); print(f"{GR}✓ Packages dihapus.{R}")
+    elif c == "3":
+        save_cfg({"packages":[],"ps_links":{},"check_interval":35,
+                  "restart_delay":10,"floating_window":True,
+                  "auto_mute":True,"auto_low_graphics":True,"webhook_url":""})
+        print(f"{GR}✓ Config direset total.{R}")
+    else:
+        print(f"{YE}Dibatalkan.{R}")
+    input("\nEnter...")
+
+# ══════════════════════════════════════════════════════════
+#  MENU 6 — LIST CONFIG
+# ══════════════════════════════════════════════════════════
+def menu_list_config():
+    cfg = load_cfg()
+    print(f"\n{CY}{'═'*55}{R}")
+    print(f"{CY}  LIST CONFIG{R}")
+    print(f"{CY}{'═'*55}{R}")
+    print(f"{YE}Packages ({len(cfg.get('packages',[]))}):{R}")
+    for p in cfg.get("packages",[]):
+        ps = cfg.get("ps_links",{}).get(p,"(belum diset)")
+        running = is_running(p)
+        status_str = f"{GR}Running{R}" if running else f"{RE}Mati{R}"
+        print(f"  {GR}▶{R} {p}")
+        print(f"       Status : {status_str}")
+        print(f"       PS     : {ps[:60]}")
+    print(f"\n{YE}Global PS Link:{R} {cfg.get('global_ps_link','(kosong)')[:60]}")
+    print(f"{YE}Interval      :{R} {cfg.get('check_interval',35)}s")
+    print(f"{YE}Restart Delay :{R} {cfg.get('restart_delay',10)}s")
+    print(f"{YE}Floating      :{R} {'✅' if cfg.get('floating_window') else '❌'}")
+    print(f"{YE}Auto Mute     :{R} {'✅' if cfg.get('auto_mute') else '❌'}")
+    print(f"{YE}Low Grafik    :{R} {'✅' if cfg.get('auto_low_graphics') else '❌'}")
+    print(f"{YE}Webhook       :{R} {cfg.get('webhook_url','(kosong)')[:50]}")
+    print(f"{CY}{'═'*55}{R}")
+    input("\nEnter...")
+
+# ══════════════════════════════════════════════════════════
+#  MENU 7 — SETUP WEBHOOK
+# ══════════════════════════════════════════════════════════
+def menu_setup_webhook():
+    cfg = load_cfg()
+    print(f"\n{CY}[ Setup Webhook Discord ]{R}")
+    current = cfg.get("webhook_url","")
+    print(f"{GY}Webhook saat ini: {current[:60] or '(kosong)'}{R}")
+    url = inp(f"{YE}Masukkan Discord Webhook URL (Enter hapus): {R}")
+    cfg["webhook_url"] = url
+    save_cfg(cfg)
+    if url:
+        print(f"{GR}✓ Webhook disimpan!{R}")
+        test = inp(f"{YE}Kirim test? (y/n): {R}").lower()
+        if test == "y":
+            _send_webhook_nocookie(url, [], "🔔 YURXZ Test", 3447003)
+            print(f"{GR}✓ Test terkirim!{R}")
+    else:
+        print(f"{YE}Webhook dihapus.{R}")
+    input("\nEnter...")
+
+# ══════════════════════════════════════════════════════════
+#  MENU 8 — SET INTERVAL
+# ══════════════════════════════════════════════════════════
+def menu_set_interval():
+    cfg = load_cfg()
+    print(f"\n{CY}[ Set Interval Cek ]{R}")
+    print(f"{GY}Interval saat ini: {cfg.get('check_interval',35)}s{R}")
+    print(f"{GY}Restart delay saat ini: {cfg.get('restart_delay',10)}s{R}")
+    val = inp(f"{YE}Interval cek (detik) [Enter skip]: {R}")
+    if val.isdigit(): cfg["check_interval"] = int(val)
+    val2 = inp(f"{YE}Restart delay (detik) [Enter skip]: {R}")
+    if val2.isdigit(): cfg["restart_delay"] = int(val2)
+    save_cfg(cfg)
+    print(f"{GR}✓ Tersimpan!{R}")
+    input("\nEnter...")
+
+# ══════════════════════════════════════════════════════════
+#  MENU 9, 10, 11 — TOGGLE
+# ══════════════════════════════════════════════════════════
+def menu_toggle(key, label):
+    cfg = load_cfg()
+    current = cfg.get(key, True)
+    cfg[key] = not current
+    save_cfg(cfg)
+    status = f"{GR}ON ✅{R}" if cfg[key] else f"{RE}OFF ❌{R}"
+    print(f"\n{CY}{label}:{R} {status}")
+    input("\nEnter...")
+
+# ══════════════════════════════════════════════════════════
+#  MENU 12 — LIHAT LOG
+# ══════════════════════════════════════════════════════════
+def menu_lihat_log():
+    print(f"\n{CY}[ Log Aktivitas (50 baris terakhir) ]{R}\n")
+    log_path = LOG_FILE
+    ok, out = run_root(f"tail -50 {log_path} 2>/dev/null")
+    if ok and out:
+        print(out)
+    else:
+        print(f"{GY}Log kosong atau belum ada.{R}")
+    input("\nEnter...")
+
+# ══════════════════════════════════════════════════════════
+#  MENU 12 — DIAGNOSTIC (TEST DETEKSI HP INI)
+# ══════════════════════════════════════════════════════════
+def menu_diagnostic():
+    clear()
+    print(f"\n{CY}╔{'═'*52}╗{R}")
+    print(f"{CY}║{MG}   DIAGNOSTIC — Test Kompatibilitas HP Ini       {CY}║{R}")
+    print(f"{CY}╚{'═'*52}╝{R}\n")
+
+    def ok_str(v): return f"{GR}✅ WORK{R}" if v else f"{RE}❌ TIDAK WORK{R}"
+
+    # ── Test 1: Root ─────────────────────────────────────
+    print(f"{YE}[1] Root Access...{R}")
+    root_ok = check_root()
+    print(f"    {ok_str(root_ok)}")
+    if not root_ok:
+        print(f"{RE}    Root tidak ada! Semua test dibatalkan.{R}")
+        input("\nEnter..."); return
+
+    # ── Test 2: pidof ────────────────────────────────────
+    print(f"\n{YE}[2] Command pidof...{R}")
+    ok, out = run_root("pidof init 2>/dev/null || pidof systemd 2>/dev/null")
+    pidof_ok = ok
+    print(f"    {ok_str(pidof_ok)}")
+
+    # ── Test 3: pm list packages ─────────────────────────
+    print(f"\n{YE}[3] Package scan (pm list packages)...{R}")
+    ok, out = run_root("pm list packages 2>/dev/null | head -3")
+    pm_ok = ok and bool(out.strip())
+    print(f"    {ok_str(pm_ok)}")
+    if pm_ok:
+        pkgs = find_installed_pkgs()
+        if pkgs:
+            print(f"    {GR}Roblox packages ditemukan: {len(pkgs)}{R}")
+            for p in pkgs: print(f"      - {p}")
+        else:
+            print(f"    {YE}⚠️  Tidak ada package Roblox (install dulu){R}")
+
+    # ── Test 4: dumpsys activity ─────────────────────────
+    print(f"\n{YE}[4] dumpsys activity (deteksi Activity)...{R}")
+    ok, out = run_root("dumpsys activity top 2>/dev/null | grep mResumedActivity | head -1")
+    dumpsys_ok = ok and bool(out.strip())
+    print(f"    {ok_str(dumpsys_ok)}")
+    if dumpsys_ok:
+        print(f"    {GY}Activity aktif: {out.strip()[:60]}{R}")
+        # Cek kalau Roblox running, tampilkan activity-nya
+        pkgs = find_installed_pkgs()
+        for p in pkgs:
+            if is_running(p):
+                act = get_current_activity(p)
+                print(f"    {GR}Roblox ({p}) Activity: {act or 'tidak terdeteksi'}{R}")
+
+    # ── Test 5: network check ────────────────────────────
+    print(f"\n{YE}[5] Network check (ss/netstat)...{R}")
+    ok_ss, _ = run_root("ss -tp 2>/dev/null | head -2")
+    ok_ns, _ = run_root("netstat -tp 2>/dev/null | head -2")
+    ok_proc, _ = run_root("cat /proc/1/net/tcp 2>/dev/null | head -2")
+    net_ok = ok_ss or ok_ns or ok_proc
+    print(f"    {ok_str(net_ok)}")
+    print(f"    {GY}ss: {ok_str(ok_ss)} | netstat: {ok_str(ok_ns)} | /proc/net: {ok_str(ok_proc)}{R}")
+
+    # ── Test 6: CPU top ──────────────────────────────────
+    print(f"\n{YE}[6] CPU monitoring (top)...{R}")
+    ok, out = run_root("top -bn1 2>/dev/null | head -3")
+    cpu_ok = ok and bool(out.strip())
+    print(f"    {ok_str(cpu_ok)}")
+
+    # ── Test 7: am start ─────────────────────────────────
+    print(f"\n{YE}[7] Launch intent (am start)...{R}")
+    ok, out = run_root("am start --help 2>/dev/null | head -1")
+    am_ok = ok
+    print(f"    {ok_str(am_ok)}")
+
+    # ── Kesimpulan ───────────────────────────────────────
+    print(f"\n{CY}{'═'*52}{R}")
+    print(f"{CY}  KESIMPULAN — Metode Deteksi yang akan dipakai:{R}")
+    print(f"{CY}{'═'*52}{R}")
+    if dumpsys_ok:
+        print(f"  {GR}✅ UTAMA  : dumpsys activity (paling akurat){R}")
+    else:
+        print(f"  {RE}❌ UTAMA  : dumpsys activity (tidak work){R}")
+
+    if net_ok:
+        print(f"  {GR}✅ BACKUP1: network check{R}")
+    else:
+        print(f"  {RE}❌ BACKUP1: network check (tidak work){R}")
+
+    if cpu_ok:
+        print(f"  {GR}✅ BACKUP2: CPU monitoring{R}")
+    else:
+        print(f"  {RE}❌ BACKUP2: CPU monitoring (tidak work){R}")
+
+    if pidof_ok:
+        print(f"  {GR}✅ BACKUP3: pidof (selalu jadi fallback){R}")
+
+    # Tentukan metode terbaik
+    if dumpsys_ok:
+        best = f"{GR}dumpsys activity{R}"
+    elif net_ok:
+        best = f"{YE}network check{R}"
+    elif cpu_ok:
+        best = f"{YE}CPU monitoring{R}"
+    else:
+        best = f"{YE}pidof only (basic){R}"
+
+    print(f"\n  {WH}Script akan pakai: {best}")
+    print(f"{CY}{'═'*52}{R}")
+
+    # Simpan hasil ke config
+    cfg = load_cfg()
+    cfg["diagnostic"] = {
+        "dumpsys": dumpsys_ok,
+        "network": net_ok,
+        "cpu":     cpu_ok,
+        "pidof":   pidof_ok,
+    }
+    save_cfg(cfg)
+    print(f"\n{GR}✓ Hasil diagnostic tersimpan ke config.{R}")
+    input("\nEnter...")
+
+# ══════════════════════════════════════════════════════════
+#  MAIN
+# ══════════════════════════════════════════════════════════
 def main():
-    # --auto: langsung mulai tanpa menu
     if ARGS.auto:
         if not check_root():
-            print("❌ Root required!")
-            sys.exit(1)
-        log_activity("Mulai dengan flag --auto", "INFO")
-        start_rejoin_app()
+            print(f"{RE}Root required!{R}"); sys.exit(1)
+        log("Start dengan --auto","INFO")
+        menu_start_rejoin()
         return
 
-    while True:
-        clear_screen()
-        print_header()
-        print("  1. Create Config  (scan cookie otomatis)")
-        print("  2. Start Rejoin")
-        print("  3. Start Rejoin --preventif (cek tiap 20s)")
-        print("  4. Start Rejoin --low (hemat RAM/CPU)")
-        print("  5. Edit Config (nano)")
-        print("  6. Lihat Log")
-        print("  7. Exit")
-        print("\n" + "="*50)
+    MENU_FN = {
+        "1":  menu_start_rejoin,
+        "2":  menu_detect_packages,
+        "3":  menu_set_global_ps,
+        "4":  menu_set_per_pkg_ps,
+        "5":  menu_clear_config,
+        "6":  menu_list_config,
+        "7":  menu_setup_webhook,
+        "8":  menu_set_interval,
+        "9":  lambda: menu_toggle("floating_window", "Floating Window"),
+        "10": lambda: menu_toggle("auto_mute", "Auto Mute"),
+        "11": lambda: menu_toggle("auto_low_graphics", "Low Grafik"),
+        "12": menu_diagnostic,
+        "13": menu_lihat_log,
+    }
 
-        c = input("\nSelect an option: ").strip()
-        if c == '1':
-            create_config()
-        elif c == '2':
-            start_rejoin_app()
-        elif c == '3':
-            ARGS.preventif = True
-            start_rejoin_app()
-        elif c == '4':
-            ARGS.low = True
-            start_rejoin_app()
-        elif c == '5':
-            edit_config()
-        elif c == '6':
-            os.system("tail -60 activity.log")
-            input("\nPress Enter...")
-        elif c == '7':
-            clear_screen()
+    while True:
+        print_banner()
+        c = inp(f"  {YE}Enter choice: {R}")
+        if c == "14":
+            clear()
+            print(f"{CY}Sampai jumpa!{R}\n")
             break
+        fn = MENU_FN.get(c)
+        if fn:
+            clear(); fn()
+        else:
+            print(f"{RE}Pilihan tidak valid!{R}")
+            time.sleep(1)
 
 if __name__ == "__main__":
     main()
