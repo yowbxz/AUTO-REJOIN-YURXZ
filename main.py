@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """
-╔══════════════════════════════════════════════════════════╗
-║          YURXZ Rejoin  v9  —  main.py                  ║
-║          Android Rooted + Termux  |  by YURXZ          ║
-╠══════════════════════════════════════════════════════════╣
-║  Deteksi (tanpa cookie):                               ║
-║    Level 1 → dumpsys activity  (Activity name)         ║
-║    Level 2 → network check     (koneksi aktif)         ║
-║    Level 3 → CPU usage         (app aktif)             ║
-║    Level 4 → pidof             (fallback universal)    ║
-╠══════════════════════════════════════════════════════════╣
-║  --auto      : langsung mulai tanpa menu               ║
-║  --preventif : cek tiap 20 detik                       ║
-║  --low       : hemat RAM/CPU                           ║
-╚══════════════════════════════════════════════════════════╝
++==========================================================+
+|          YURXZ Rejoin  v9  —  main.py                  |
+|          Android Rooted + Termux  |  by YURXZ          |
++==========================================================+
+|  Deteksi (tanpa cookie):                               |
+|    Level 1 → dumpsys activity  (Activity name)         |
+|    Level 2 → network check     (koneksi aktif)         |
+|    Level 3 → CPU usage         (app aktif)             |
+|    Level 4 → pidof             (fallback universal)    |
++==========================================================+
+|  --auto      : langsung mulai tanpa menu               |
+|  --preventif : cek tiap 20 detik                       |
+|  --low       : hemat RAM/CPU                           |
++==========================================================+
 """
 
 import os, sys, json, subprocess, time, math, re, argparse
 
-# ─── ARGS ──────────────────────────────────────────────────
+# --- ARGS --------------------------------------------------
 parser = argparse.ArgumentParser()
 parser.add_argument("--auto",      action="store_true")
 parser.add_argument("--preventif", action="store_true")
@@ -30,7 +30,7 @@ CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 LOG_FILE    = os.path.join(BASE_DIR, "activity.log")
 STATUS_FILE = os.path.join(BASE_DIR, "status.json")
 
-# ─── WARNA ─────────────────────────────────────────────────
+# --- WARNA -------------------------------------------------
 R  = "\033[0m"
 CY = "\033[96m"
 GR = "\033[92m"
@@ -40,11 +40,12 @@ MG = "\033[95m"
 GY = "\033[90m"
 WH = "\033[97m"
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  HELPERS
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def clear():
-    os.system("clear")
+    sys.stdout.write("\033[2J\033[H")
+    sys.stdout.flush()
 
 def run_root(cmd, timeout=15):
     try:
@@ -62,11 +63,150 @@ def log(msg, lvl="INFO"):
     except:
         pass
 
-def inp(prompt):
-    print("\033[?25h", end="")
+def _open_tty():
+    """Buka /dev/tty langsung untuk input. Fallback ke sys.stdin."""
+    try:
+        return open('/dev/tty', 'r+b', buffering=0)
+    except:
+        return None
+
+def _read_input(tty_file, max_chars=2, timeout=60):
+    """
+    Baca input dari tty langsung pakai termios raw mode.
+    Tidak butuh Enter — tiap karakter langsung diproses.
+    """
+    import select
+    try:
+        import termios, tty as ttymod
+    except ImportError:
+        # termios tidak ada — fallback readline
+        try:
+            line = sys.stdin.readline()
+            return line.strip() if line else ""
+        except:
+            return ""
+
+    chars = []
+    fd = tty_file.fileno() if tty_file else sys.stdin.fileno()
+    src = tty_file if tty_file else sys.stdin
+
+    try:
+        old = termios.tcgetattr(fd)
+        ttymod.setraw(fd)
+    except:
+        try:
+            line = sys.stdin.readline()
+            return line.strip() if line else ""
+        except:
+            return ""
+
+    try:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            sisa = max(0.05, deadline - time.time())
+            ready, _, _ = select.select([src], [], [], sisa)
+            if not ready:
+                continue
+            ch = src.read(1)
+            if not ch:
+                break
+            # Decode bytes ke string
+            if isinstance(ch, bytes):
+                try:
+                    ch = ch.decode('utf-8', errors='ignore')
+                except:
+                    continue
+            if not ch:
+                continue
+            if ch in ('\n', '\r', '\x00'):
+                sys.stdout.write('\r\n')
+                sys.stdout.flush()
+                break
+            if ch in ('\x7f', '\x08'):
+                if chars:
+                    chars.pop()
+                    sys.stdout.write('\b \b')
+                    sys.stdout.flush()
+                continue
+            if ch == '\x03':
+                raise KeyboardInterrupt
+            if ch.isprintable():
+                chars.append(ch)
+                sys.stdout.write(ch)
+                sys.stdout.flush()
+                val = ''.join(chars)
+                # Menu 2-9 → 1 digit langsung
+                if len(chars) == 1 and val.isdigit() and val not in ('1',):
+                    break
+                # Menu 10-14 → 2 digit
+                if len(chars) >= max_chars:
+                    break
+    finally:
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        except:
+            pass
+
+    return ''.join(chars).strip()
+
+def inp(prompt, max_chars=2, timeout=60):
+    """Input langsung dari /dev/tty — tidak perlu Enter, work di semua terminal."""
+    sys.stdout.write(prompt)
     sys.stdout.flush()
-    try:    return input(prompt).strip()
-    except: return ""
+    tty = _open_tty()
+    result = _read_input(tty, max_chars=max_chars, timeout=timeout)
+    if tty:
+        try: tty.close()
+        except: pass
+    return result
+
+def inp_text(prompt, timeout=120):
+    """Input teks panjang (PS Link, URL, dll) — baca sampai Enter."""
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    tty = _open_tty()
+    result = _read_input(tty, max_chars=999, timeout=timeout)
+    if tty:
+        try: tty.close()
+        except: pass
+    return result
+
+def pause_auto(detik=3):
+    """Auto lanjut setelah beberapa detik. Tekan tombol apapun untuk skip."""
+    import select
+    tty = _open_tty()
+    src = tty if tty else sys.stdin
+    try:
+        import termios, tty as ttymod
+        fd = src.fileno()
+        old = termios.tcgetattr(fd)
+        ttymod.setraw(fd)
+        raw_ok = True
+    except:
+        raw_ok = False
+
+    try:
+        for i in range(detik, 0, -1):
+            sys.stdout.write(f"\r  {GY}Lanjut dalam {i}s... (tekan tombol apapun untuk skip){R}  ")
+            sys.stdout.flush()
+            ready, _, _ = select.select([src], [], [], 1)
+            if ready:
+                src.read(1)
+                break
+    except:
+        time.sleep(detik)
+    finally:
+        if raw_ok:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            except:
+                pass
+        if tty:
+            try: tty.close()
+            except: pass
+
+    sys.stdout.write("\r" + " "*60 + "\r")
+    sys.stdout.flush()
 
 def get_memory():
     try:
@@ -88,9 +228,9 @@ def check_root():
     except:
         return False
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  CONFIG
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def load_cfg():
     if os.path.exists(CONFIG_FILE):
         try:
@@ -116,9 +256,9 @@ def save_cfg(cfg):
     except Exception as e:
         print(f"{RE}Gagal simpan config: {e}{R}")
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  ROBLOX PACKAGE DETECTION — PURE DEVICE SCAN
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def find_installed_pkgs():
     """
     Scan SEMUA package di device secara dinamis.
@@ -174,9 +314,9 @@ def get_pid(pkg):
     ok, out = run_root(f"pidof {pkg}")
     return out.strip() if ok and out.strip() else None
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  SISTEM DETEKSI — 4 METODE + FALLBACK OTOMATIS
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #
 #  LEVEL 1 (Utama)  : dumpsys activity → cek Activity name
 #  LEVEL 2 (Backup) : network check    → cek koneksi aktif
@@ -184,7 +324,7 @@ def get_pid(pkg):
 #  LEVEL 4 (Final)  : pidof only       → cek app hidup/mati
 #
 #  Kalau level 1 gagal → otomatis turun ke level 2, dst.
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 
 INGAME_ACTIVITIES = [
     "GameActivity",
@@ -313,7 +453,7 @@ def is_in_game(pkg):
 
     current_method = _detection_method.get(pkg, "auto")
 
-    # ── LEVEL 1: Activity check ────────────────────────
+    # -- LEVEL 1: Activity check ------------------------
     if current_method in ("auto", "activity"):
         works, ingame, activity = check_activity(pkg)
         if works:
@@ -326,7 +466,7 @@ def is_in_game(pkg):
                 _detection_method[pkg] = "auto"
             log(f"{pkg}: dumpsys activity tidak work → coba network", "WARN")
 
-    # ── LEVEL 2: Network check ─────────────────────────
+    # -- LEVEL 2: Network check -------------------------
     if current_method in ("auto", "network"):
         works, connected = check_network(pkg)
         if works:
@@ -338,7 +478,7 @@ def is_in_game(pkg):
                 _detection_method[pkg] = "auto"
             log(f"{pkg}: network check tidak work → coba CPU", "WARN")
 
-    # ── LEVEL 3: CPU activity check ────────────────────
+    # -- LEVEL 3: CPU activity check --------------------
     if current_method in ("auto", "cpu"):
         works, active = check_cpu_activity(pkg)
         if works:
@@ -348,23 +488,23 @@ def is_in_game(pkg):
         else:
             log(f"{pkg}: CPU check tidak work → fallback pidof", "WARN")
 
-    # ── LEVEL 4: Fallback — pidof saja ─────────────────
+    # -- LEVEL 4: Fallback — pidof saja -----------------
     _detection_method[pkg] = "pidof"
     running = is_running(pkg)
     log(f"{pkg}: Metode=pidof (fallback) | Running={running}", "DEBUG")
     return running, "pidof-only", "pidof"
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  NETWORK CHECK (standalone, dipakai is_in_game)
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def has_active_connection(pkg):
     """Wrapper untuk backward compat."""
     works, connected = check_network(pkg)
     return connected
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  FREEZE DETECTION via CPU
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def get_cpu_usage(pkg):
     ok, out = run_root(f"top -bn1 | grep {pkg}", timeout=10)
     if ok and out:
@@ -392,9 +532,9 @@ def is_frozen(pkg):
         time.sleep(3)
     return bool(samples) and (sum(samples) / len(samples)) < 0.5
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  ROBLOX ACTIONS
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def force_stop(pkg):
     run_root(f"am force-stop {pkg}")
     time.sleep(1)
@@ -501,9 +641,9 @@ def launch_game(ps_link, pkg, bounds=None):
             return True
     return False
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  BANNER MENU
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 MENU_ITEMS = [
     ("1",  "Start Auto Rejoin"),
     ("2",  "Detect & Set Packages Roblox"),
@@ -522,91 +662,75 @@ MENU_ITEMS = [
 ]
 
 def print_banner():
-    clear()
+    sys.stdout.write("\033[2J\033[H")
+    sys.stdout.flush()
     mem, mpct = get_memory()
-    cfg = load_cfg()
+    cfg  = load_cfg()
     pkgs = cfg.get("packages", [])
-    print(f"{CY}╔{'═'*55}╗{R}")
-    print(f"{CY}║{MG}   YURXZ Rejoin v9  —  No Cookie Edition        {CY}║{R}")
-    print(f"{CY}║{GY}   by YURXZ  |  Detect via Package Process          {CY}║{R}")
-    print(f"{CY}║{GY}   RAM Free: {mem} ({mpct}%) | Packages: {len(pkgs)}{'':<18}{CY}║{R}")
-    print(f"{CY}╠{'═'*55}╣{R}")
-    print(f"{CY}║  {'No':<5} {'Menu':<47} ║{R}")
-    print(f"{CY}╠{'═'*55}╣{R}")
+    print(f"{CY}+{'='*38}+{R}")
+    print(f"{MG}  YURXZ Rejoin v9  --  No Cookie{R}")
+    print(f"{GY}  by YURXZ | RAM: {mem} ({mpct}%){R}")
+    print(f"{GY}  Packages: {len(pkgs)}{R}")
+    print(f"{CY}+{'='*38}+{R}")
     for num, label in MENU_ITEMS:
-        print(f"{CY}║  {YE}{num:<5}{WH}{label:<47}{CY} ║{R}")
-    print(f"{CY}╚{'═'*55}╝{R}")
+        print(f"  {YE}{num:<3}{R} {WH}{label}{R}")
+    print(f"{CY}+{'='*38}+{R}")
     print()
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  DRAW UI MONITORING
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def draw_ui(accounts, sys_status, prog="", nxt_wh=""):
-    sys.stdout.write("\033[2J\033[H\033[?25h")
+    sys.stdout.write("\033[2J\033[H")
+    sys.stdout.flush()
     mem, mpct = get_memory()
-    W = 68; c1 = 34; c2 = W - c1 - 5
-
-    def trunc(s, l):
-        s = str(s).replace('\n','').replace('\r','')
-        return s[:l-1] + "." if len(s) > l else s
-
-    def sep(l, m, rv, c='─'):
-        sys.stdout.write(f"{CY}{l}{c*(c1+1)}{m}{c*(c2+1)}{rv}{R}\n")
-
-    def row(t1, t2, col=R):
-        sys.stdout.write(
-            f"{CY}│{R} {trunc(t1,c1):<{c1}} "
-            f"{CY}│{R} {col}{trunc(t2,c2):<{c2}}{R} {CY}│{R}\n"
-        )
-
-    sys.stdout.write(f"\n{MG}  🎮 YURXZ Rejoin v9  |  No Cookie  |  by YURXZ{R}\n\n")
-    sep('┌','┬','┐')
-    row("INFO", "STATUS")
-    sep('├','┼','┤')
 
     st_txt = (prog + " " if prog else "") + (sys_status or "Idle")
     if nxt_wh: st_txt += f" | {nxt_wh}"
-    row("⚙  System", st_txt, YE)
-    row("💾 Memory", f"Free: {mem} ({mpct}%)", GY)
+
+    print(f"{CY}+{'='*38}+{R}")
+    print(f"{MG}  YURXZ Rejoin v9  |  by YURXZ{R}")
+    print(f"{CY}+{'='*38}+{R}")
+    print(f"{YE}  [*] {st_txt}{R}")
+    print(f"{GY}  [M] RAM: {mem} ({mpct}%){R}")
 
     mode = []
     if ARGS.preventif: mode.append("PREVENTIF")
     if ARGS.low:       mode.append("LOW-PERF")
-    if mode: row("🔧 Mode", " | ".join(mode), GY)
+    if mode: print(f"{GY}  [~] {' | '.join(mode)}{R}")
 
-    sep('├','┼','┤')
-    row("PACKAGE", "STATUS")
-    sep('├','┼','┤')
+    print(f"{CY}+{'-'*38}+{R}")
 
     for a in accounts:
         st  = a.get("status", "?")
         mtd = a.get("method", "auto")
-        mtd_icon = {
-            "activity": "📋",
-            "network":  "🌐",
-            "cpu":      "💻",
-            "pidof":    "🔍",
-        }.get(mtd, "⚙️")
+        mtd_label = {
+            "activity": "[A]",
+            "network":  "[N]",
+            "cpu":      "[C]",
+            "pidof":    "[P]",
+        }.get(mtd, "[?]")
         col = GR
-        if any(x in st for x in ["Restart","Launch","Wait","Cache","Mute","Grafik","Init","Stop","Loading"]):
+        if any(x in st for x in ["Restart","Launch","Wait","Cache","Stop","Loading"]):
             col = YE
-        elif any(x in st for x in ["Error","Failed","Crash","Freeze","mati","disconnect","putus"]):
+        elif any(x in st for x in ["Error","Failed","Crash","Freeze","mati","putus"]):
             col = RE
-        elif any(x in st for x in ["Checking","Idle","Pending","Detect","Cek"]):
+        elif any(x in st for x in ["Checking","Idle","Pending","Cek"]):
             col = GY
-        row(f"  {mtd_icon} {a.get('pkg','?')}", st, col)
+        pkg_short = a.get('pkg','?').replace('com.roblox.','')
+        print(f"  {mtd_label} {col}{pkg_short:<20} {st}{R}")
 
-    sep('└','┴','┘')
-    sys.stdout.write(f"\n{GY}  [Ctrl+C untuk berhenti]{R}\n")
+    print(f"{CY}+{'='*38}+{R}")
+    print(f"{GY}  Ctrl+C untuk berhenti{R}")
     sys.stdout.flush()
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  MENU 1 — START AUTO REJOIN (tanpa cookie)
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def menu_start_rejoin():
     if not check_root():
         print(f"{RE}Root access required!{R}")
-        input("\nEnter..."); return
+        pause_auto(); return
 
     cfg  = load_cfg()
     pkgs = cfg.get("packages", [])
@@ -617,7 +741,7 @@ def menu_start_rejoin():
         pkgs = find_installed_pkgs()
         if not pkgs:
             print(f"{RE}Tidak ada package Roblox ditemukan!{R}")
-            input("\nEnter..."); return
+            pause_auto(); return
         cfg["packages"] = pkgs
         save_cfg(cfg)
 
@@ -630,7 +754,7 @@ def menu_start_rejoin():
         print(f"{RE}PS Link belum diset untuk:{R}")
         for m in missing: print(f"  - {m}")
         print(f"{YE}Gunakan Menu 3 atau 4 untuk set PS Link.{R}")
-        input("\nEnter..."); return
+        pause_auto(); return
 
     interval      = 20 if ARGS.preventif else cfg.get("check_interval", 35)
     restart_delay = cfg.get("restart_delay", 10)
@@ -660,7 +784,7 @@ def menu_start_rejoin():
 
     run_root("setenforce 0")
 
-    # ── Launch awal semua package ─────────────────────────
+    # -- Launch awal semua package -------------------------
     for i, a in enumerate(accounts):
         pkg  = a["pkg"]
         link = a["ps_link"]
@@ -710,7 +834,7 @@ def menu_start_rejoin():
 
     last_wh = time.time()
 
-    # ── Monitoring loop ───────────────────────────────────
+    # -- Monitoring loop -----------------------------------
     try:
         while True:
             nxt_wh = ""
@@ -729,14 +853,14 @@ def menu_start_rejoin():
                 needs_rejoin = False
                 reason = ""
 
-                # ══ CEK 1: App masih running? ════════════
+                # == CEK 1: App masih running? ============
                 if not is_running(pkg):
                     needs_rejoin = True
                     reason = "App mati / crash"
                     a["method"] = "pidof"
 
                 else:
-                    # ══ CEK 2-4: Deteksi dengan fallback ═
+                    # == CEK 2-4: Deteksi dengan fallback =
                     a["status"] = "Detecting..."
                     draw_ui(accounts, "Monitoring", f"Check [{i+1}/{tot}]", nxt_wh)
 
@@ -767,7 +891,7 @@ def menu_start_rejoin():
                         else:
                             a["status"] = "Running ✅ | pidof"
 
-                # ── Rejoin ────────────────────────────────
+                # -- Rejoin --------------------------------
                 if needs_rejoin:
                     a["rejoin_count"] += 1
                     log(f"{pkg}: {reason} → Rejoin #{a['rejoin_count']}", "WARN")
@@ -852,9 +976,9 @@ def _send_webhook_nocookie(url, accounts, title="📊 Status Update", color=3447
     except:
         pass
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  MENU 2 — DETECT & SET PACKAGES
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def menu_detect_packages():
     cfg = load_cfg()
     print(f"\n{CY}[ Detect & Set Packages Roblox ]{R}")
@@ -862,7 +986,7 @@ def menu_detect_packages():
     found = find_installed_pkgs()
     if not found:
         print(f"{RE}Tidak ada package Roblox ditemukan!{R}")
-        input("\nEnter..."); return
+        pause_auto(); return
     print(f"{GR}Package ditemukan:{R}")
     for p in found:
         ok, out = run_root(f"dumpsys package {p} | grep versionName")
@@ -871,30 +995,30 @@ def menu_detect_packages():
     cfg["packages"] = found
     save_cfg(cfg)
     print(f"\n{GR}✓ {len(found)} package tersimpan ke config!{R}")
-    input("\nEnter...")
+    pause_auto()
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  MENU 3 — SET PS LINK / GAME ID (SEMUA PACKAGE)
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def menu_set_global_ps():
     cfg = load_cfg()
     print(f"\n{CY}[ Set PS Link / Game ID untuk Semua Package ]{R}")
-    print(f"{GY}{'─'*50}{R}")
+    print(f"{GY}{'-'*50}{R}")
     print(f"{GY}Format yang bisa diinput:{R}")
     print(f"  {WH}1. Game ID biasa     {GY}→ {GR}995679412{R}")
     print(f"  {WH}2. Roblox URI        {GY}→ {GR}roblox://placeId=995679412{R}")
     print(f"  {WH}3. Link game Roblox  {GY}→ {GR}https://www.roblox.com/games/995679412/...{R}")
     print(f"  {WH}4. Private Server    {GY}→ {GR}https://www.roblox.com/games/...?privateServerLinkCode=xxx{R}")
-    print(f"{GY}{'─'*50}{R}")
+    print(f"{GY}{'-'*50}{R}")
     current = cfg.get("global_ps_link","")
     if current:
         parsed = parse_launch_link(current)
         print(f"{GY}Saat ini : {current[:55]}{R}")
         print(f"{GY}Dikonversi: {parsed[:55]}{R}")
     print()
-    link = inp(f"{YE}Masukkan PS Link / Game ID: {R}")
+    link = inp_text(f"{YE}Masukkan PS Link / Game ID: {R}")
     if not link:
-        print(f"{RE}Kosong!{R}"); input("\nEnter..."); return
+        print(f"{RE}Kosong!{R}"); pause_auto(); return
     parsed = parse_launch_link(link)
     print(f"\n{GY}Input    : {link[:55]}{R}")
     print(f"{GR}Dikonversi: {parsed[:55]}{R}")
@@ -907,29 +1031,29 @@ def menu_set_global_ps():
     cfg["ps_links"] = ps_links
     save_cfg(cfg)
     print(f"\n{GR}✓ Tersimpan untuk semua package!{R}")
-    input("\nEnter...")
+    pause_auto()
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  MENU 4 — SET PS LINK PER PACKAGE
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def menu_set_per_pkg_ps():
     cfg  = load_cfg()
     pkgs = cfg.get("packages", find_installed_pkgs())
     print(f"\n{CY}[ Set PS Link / Game ID per Package ]{R}")
-    print(f"{GY}{'─'*50}{R}")
+    print(f"{GY}{'-'*50}{R}")
     print(f"{GY}Format yang bisa diinput:{R}")
     print(f"  {WH}1. Game ID biasa  {GY}→ {GR}995679412{R}")
     print(f"  {WH}2. Roblox URI     {GY}→ {GR}roblox://placeId=995679412{R}")
     print(f"  {WH}3. Link game      {GY}→ {GR}https://www.roblox.com/games/...{R}")
     print(f"  {WH}4. Private Server {GY}→ {GR}https://www.roblox.com/...?privateServerLinkCode=xxx{R}")
-    print(f"{GY}{'─'*50}{R}\n")
+    print(f"{GY}{'-'*50}{R}\n")
     ps_links = cfg.get("ps_links", {})
     for pkg in pkgs:
         current = ps_links.get(pkg,"")
         print(f"{CY}▶ {pkg}{R}")
         if current:
             print(f"  {GY}Saat ini: {current[:55]}{R}")
-        val = inp(f"  {YE}Input baru (Enter skip): {R}")
+        val = inp_text(f"  {YE}Input baru (Enter skip): {R}")
         if val:
             parsed = parse_launch_link(val)
             print(f"  {GR}✓ Dikonversi → {parsed[:50]}{R}")
@@ -939,11 +1063,11 @@ def menu_set_per_pkg_ps():
     cfg["packages"] = pkgs
     save_cfg(cfg)
     print(f"{GR}✓ PS Link per-package tersimpan!{R}")
-    input("\nEnter...")
+    pause_auto()
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  MENU 5 — CLEAR CONFIG
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def menu_clear_config():
     cfg = load_cfg()
     print(f"\n{CY}[ Clear Config ]{R}")
@@ -965,16 +1089,16 @@ def menu_clear_config():
         print(f"{GR}✓ Config direset total.{R}")
     else:
         print(f"{YE}Dibatalkan.{R}")
-    input("\nEnter...")
+    pause_auto()
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  MENU 6 — LIST CONFIG
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def menu_list_config():
     cfg = load_cfg()
-    print(f"\n{CY}{'═'*55}{R}")
+    print(f"\n{CY}{'='*55}{R}")
     print(f"{CY}  LIST CONFIG{R}")
-    print(f"{CY}{'═'*55}{R}")
+    print(f"{CY}{'='*55}{R}")
     print(f"{YE}Packages ({len(cfg.get('packages',[]))}):{R}")
     for p in cfg.get("packages",[]):
         ps = cfg.get("ps_links",{}).get(p,"(belum diset)")
@@ -990,18 +1114,18 @@ def menu_list_config():
     print(f"{YE}Auto Mute     :{R} {'✅' if cfg.get('auto_mute') else '❌'}")
     print(f"{YE}Low Grafik    :{R} {'✅' if cfg.get('auto_low_graphics') else '❌'}")
     print(f"{YE}Webhook       :{R} {cfg.get('webhook_url','(kosong)')[:50]}")
-    print(f"{CY}{'═'*55}{R}")
-    input("\nEnter...")
+    print(f"{CY}{'='*55}{R}")
+    pause_auto()
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  MENU 7 — SETUP WEBHOOK
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def menu_setup_webhook():
     cfg = load_cfg()
     print(f"\n{CY}[ Setup Webhook Discord ]{R}")
     current = cfg.get("webhook_url","")
     print(f"{GY}Webhook saat ini: {current[:60] or '(kosong)'}{R}")
-    url = inp(f"{YE}Masukkan Discord Webhook URL (Enter hapus): {R}")
+    url = inp_text(f"{YE}Masukkan Discord Webhook URL (Enter hapus): {R}")
     cfg["webhook_url"] = url
     save_cfg(cfg)
     if url:
@@ -1012,27 +1136,27 @@ def menu_setup_webhook():
             print(f"{GR}✓ Test terkirim!{R}")
     else:
         print(f"{YE}Webhook dihapus.{R}")
-    input("\nEnter...")
+    pause_auto()
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  MENU 8 — SET INTERVAL
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def menu_set_interval():
     cfg = load_cfg()
     print(f"\n{CY}[ Set Interval Cek ]{R}")
     print(f"{GY}Interval saat ini: {cfg.get('check_interval',35)}s{R}")
     print(f"{GY}Restart delay saat ini: {cfg.get('restart_delay',10)}s{R}")
-    val = inp(f"{YE}Interval cek (detik) [Enter skip]: {R}")
+    val = inp_text(f"{YE}Interval cek (detik) [Enter skip]: {R}")
     if val.isdigit(): cfg["check_interval"] = int(val)
-    val2 = inp(f"{YE}Restart delay (detik) [Enter skip]: {R}")
+    val2 = inp_text(f"{YE}Restart delay (detik) [Enter skip]: {R}")
     if val2.isdigit(): cfg["restart_delay"] = int(val2)
     save_cfg(cfg)
     print(f"{GR}✓ Tersimpan!{R}")
-    input("\nEnter...")
+    pause_auto()
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  MENU 9, 10, 11 — TOGGLE
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def menu_toggle(key, label):
     cfg = load_cfg()
     current = cfg.get(key, True)
@@ -1040,11 +1164,11 @@ def menu_toggle(key, label):
     save_cfg(cfg)
     status = f"{GR}ON ✅{R}" if cfg[key] else f"{RE}OFF ❌{R}"
     print(f"\n{CY}{label}:{R} {status}")
-    input("\nEnter...")
+    pause_auto()
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  MENU 12 — LIHAT LOG
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def menu_lihat_log():
     print(f"\n{CY}[ Log Aktivitas (50 baris terakhir) ]{R}\n")
     log_path = LOG_FILE
@@ -1053,34 +1177,34 @@ def menu_lihat_log():
         print(out)
     else:
         print(f"{GY}Log kosong atau belum ada.{R}")
-    input("\nEnter...")
+    pause_auto()
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  MENU 12 — DIAGNOSTIC (TEST DETEKSI HP INI)
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def menu_diagnostic():
     clear()
-    print(f"\n{CY}╔{'═'*52}╗{R}")
-    print(f"{CY}║{MG}   DIAGNOSTIC — Test Kompatibilitas HP Ini       {CY}║{R}")
-    print(f"{CY}╚{'═'*52}╝{R}\n")
+    print(f"\n{CY}+{'='*52}+{R}")
+    print(f"{CY}|{MG}   DIAGNOSTIC — Test Kompatibilitas HP Ini       {CY}|{R}")
+    print(f"{CY}+{'='*52}+{R}\n")
 
     def ok_str(v): return f"{GR}✅ WORK{R}" if v else f"{RE}❌ TIDAK WORK{R}"
 
-    # ── Test 1: Root ─────────────────────────────────────
+    # -- Test 1: Root -------------------------------------
     print(f"{YE}[1] Root Access...{R}")
     root_ok = check_root()
     print(f"    {ok_str(root_ok)}")
     if not root_ok:
         print(f"{RE}    Root tidak ada! Semua test dibatalkan.{R}")
-        input("\nEnter..."); return
+        pause_auto(); return
 
-    # ── Test 2: pidof ────────────────────────────────────
+    # -- Test 2: pidof ------------------------------------
     print(f"\n{YE}[2] Command pidof...{R}")
     ok, out = run_root("pidof init 2>/dev/null || pidof systemd 2>/dev/null")
     pidof_ok = ok
     print(f"    {ok_str(pidof_ok)}")
 
-    # ── Test 3: pm list packages ─────────────────────────
+    # -- Test 3: pm list packages -------------------------
     print(f"\n{YE}[3] Package scan (pm list packages)...{R}")
     ok, out = run_root("pm list packages 2>/dev/null | head -3")
     pm_ok = ok and bool(out.strip())
@@ -1093,7 +1217,7 @@ def menu_diagnostic():
         else:
             print(f"    {YE}⚠️  Tidak ada package Roblox (install dulu){R}")
 
-    # ── Test 4: dumpsys activity ─────────────────────────
+    # -- Test 4: dumpsys activity -------------------------
     print(f"\n{YE}[4] dumpsys activity (deteksi Activity)...{R}")
     ok, out = run_root("dumpsys activity top 2>/dev/null | grep mResumedActivity | head -1")
     dumpsys_ok = ok and bool(out.strip())
@@ -1107,7 +1231,7 @@ def menu_diagnostic():
                 act = get_current_activity(p)
                 print(f"    {GR}Roblox ({p}) Activity: {act or 'tidak terdeteksi'}{R}")
 
-    # ── Test 5: network check ────────────────────────────
+    # -- Test 5: network check ----------------------------
     print(f"\n{YE}[5] Network check (ss/netstat)...{R}")
     ok_ss, _ = run_root("ss -tp 2>/dev/null | head -2")
     ok_ns, _ = run_root("netstat -tp 2>/dev/null | head -2")
@@ -1116,22 +1240,22 @@ def menu_diagnostic():
     print(f"    {ok_str(net_ok)}")
     print(f"    {GY}ss: {ok_str(ok_ss)} | netstat: {ok_str(ok_ns)} | /proc/net: {ok_str(ok_proc)}{R}")
 
-    # ── Test 6: CPU top ──────────────────────────────────
+    # -- Test 6: CPU top ----------------------------------
     print(f"\n{YE}[6] CPU monitoring (top)...{R}")
     ok, out = run_root("top -bn1 2>/dev/null | head -3")
     cpu_ok = ok and bool(out.strip())
     print(f"    {ok_str(cpu_ok)}")
 
-    # ── Test 7: am start ─────────────────────────────────
+    # -- Test 7: am start ---------------------------------
     print(f"\n{YE}[7] Launch intent (am start)...{R}")
     ok, out = run_root("am start --help 2>/dev/null | head -1")
     am_ok = ok
     print(f"    {ok_str(am_ok)}")
 
-    # ── Kesimpulan ───────────────────────────────────────
-    print(f"\n{CY}{'═'*52}{R}")
+    # -- Kesimpulan ---------------------------------------
+    print(f"\n{CY}{'='*52}{R}")
     print(f"{CY}  KESIMPULAN — Metode Deteksi yang akan dipakai:{R}")
-    print(f"{CY}{'═'*52}{R}")
+    print(f"{CY}{'='*52}{R}")
     if dumpsys_ok:
         print(f"  {GR}✅ UTAMA  : dumpsys activity (paling akurat){R}")
     else:
@@ -1161,7 +1285,7 @@ def menu_diagnostic():
         best = f"{YE}pidof only (basic){R}"
 
     print(f"\n  {WH}Script akan pakai: {best}")
-    print(f"{CY}{'═'*52}{R}")
+    print(f"{CY}{'='*52}{R}")
 
     # Simpan hasil ke config
     cfg = load_cfg()
@@ -1173,11 +1297,11 @@ def menu_diagnostic():
     }
     save_cfg(cfg)
     print(f"\n{GR}✓ Hasil diagnostic tersimpan ke config.{R}")
-    input("\nEnter...")
+    pause_auto()
 
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 #  MAIN
-# ══════════════════════════════════════════════════════════
+# ==========================================================
 def main():
     if ARGS.auto:
         if not check_root():
