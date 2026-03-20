@@ -712,7 +712,7 @@ MENU_ITEMS = [
 ]
 
 def get_term_width():
-    """Auto detect lebar terminal — sama persis dengan draw_ui."""
+    """Auto detect lebar terminal."""
     try:
         import shutil
         return shutil.get_terminal_size().columns
@@ -724,7 +724,7 @@ def get_term_width():
             return cols
     except:
         pass
-    return 50
+    return 44
 
 def print_banner():
     sys.stdout.write("\033[2J\033[H")
@@ -733,33 +733,30 @@ def print_banner():
     cfg  = load_cfg()
     pkgs = cfg.get("packages", [])
 
-    # Auto detect lebar — sama dengan draw_ui
-    W  = max(32, get_term_width() - 1)
-    c1 = int(W * 0.60)
+    W  = max(30, get_term_width() - 1)
+    c1 = int(W * 0.18)
     c2 = W - c1 - 3
 
-    def trunc(s, l):
-        s = str(s).replace('\n','').replace('\r','')
-        return s[:l-1] + "." if len(s) > l else s
+    def sep(ch='-'):
+        sys.stdout.write(f"{CY}+{ch*(c1+1)}+{ch*(c2+1)}+{R}\n")
 
-    def sep(lc, mc, rc, ch='\u2500'):
-        sys.stdout.write(f"{CY}{lc}{ch*(c1+1)}{mc}{ch*(c2+1)}{rc}{R}\n")
-
-    def row(t1, t2, col=R):
+    def row(t1, t2, c1v=None, c2v=None):
+        _c1 = c1v or R
+        _c2 = c2v or R
         sys.stdout.write(
-            f"{CY}\u2502{R} {trunc(t1,c1):<{c1}} "
-            f"{CY}\u2502{col} {trunc(t2,c2):<{c2}}{R} {CY}\u2502{R}\n"
+            f"{CY}|{_c1} {str(t1):<{c1}} "
+            f"{CY}|{_c2} {str(t2):<{c2}}{R} {CY}|{R}\n"
         )
 
-    sys.stdout.write(f"\n{MG}  \U0001f3ae YURXZ Rejoin v9  |  No Cookie  |  by YURXZ{R}\n")
+    sys.stdout.write(f"\n{MG}  YURXZ Rejoin v9  |  No Cookie  |  by YURXZ{R}\n")
     sys.stdout.write(f"{GY}  RAM: {mem} ({mpct}%) | Packages: {len(pkgs)}{R}\n\n")
 
-    sep("\u250c", "\u252c", "\u2510")
-    row("No", "Menu")
-    sep("\u251c", "\u253c", "\u2524")
+    sep('=')
+    row("No", "Menu", YE, WH)
+    sep('-')
     for num, label in MENU_ITEMS:
-        row(f"  {YE}{num}", f"{WH}{label}")
-    sep("\u2514", "\u2534", "\u2518", "\u2500")
+        row(num, label, YE, WH)
+    sep('=')
     print()
 
 # ==========================================================
@@ -770,28 +767,32 @@ def draw_ui(accounts, sys_status, prog="", nxt_wh=""):
     sys.stdout.flush()
     mem, mpct = get_memory()
 
-    # Auto detect lebar terminal
+    # Auto detect lebar terminal — ASCII only, no emoji/unicode box
     try:
         import shutil
         W = shutil.get_terminal_size().columns
     except:
-        W = int(os.environ.get("COLUMNS", 50))
-    W = max(32, W - 1)
+        W = int(os.environ.get("COLUMNS", 44))
+    W = max(30, W - 1)
 
-    c1 = int(W * 0.60)
+    c1 = int(W * 0.58)
     c2 = W - c1 - 3
 
     def trunc(s, l):
         s = str(s).replace('\n','').replace('\r','')
+        # Hapus semua karakter non-ASCII supaya lebar konsisten
+        s = s.encode('ascii', errors='replace').decode('ascii')
         return s[:l-1] + "." if len(s) > l else s
 
-    def sep(lc, mc, rc, ch='\u2500'):
-        sys.stdout.write(f"{CY}{lc}{ch*(c1+1)}{mc}{ch*(c2+1)}{rc}{R}\n")
+    def sep(ch='-'):
+        sys.stdout.write(f"{CY}+{ch*(c1+1)}+{ch*(c2+1)}+{R}\n")
 
     def row(t1, t2, col=R):
+        t1 = t1.encode('ascii', errors='replace').decode('ascii')
+        t2 = t2.encode('ascii', errors='replace').decode('ascii')
         sys.stdout.write(
-            f"{CY}\u2502{R} {trunc(t1,c1):<{c1}} "
-            f"{CY}\u2502{col} {trunc(t2,c2):<{c2}}{R} {CY}\u2502{R}\n"
+            f"{CY}|{R} {t1:<{c1}} "
+            f"{CY}|{col} {t2:<{c2}}{R} {CY}|{R}\n"
         )
 
     st_txt = (prog + " " if prog else "") + (sys_status or "Idle")
@@ -801,26 +802,28 @@ def draw_ui(accounts, sys_status, prog="", nxt_wh=""):
     if ARGS.preventif: mode.append("PREVENTIF")
     if ARGS.low:       mode.append("LOW-PERF")
 
-    sys.stdout.write(f"\n{MG}  \U0001f3ae YURXZ Rejoin v9  |  No Cookie  |  by YURXZ{R}\n\n")
-    sep("\u250c", "\u252c", "\u2510")
+    mtd_labels = {
+        "activity": "[A]",
+        "network":  "[N]",
+        "cpu":      "[C]",
+        "pidof":    "[P]",
+    }
+
+    sys.stdout.write(f"\n{MG}  YURXZ Rejoin v9  |  No Cookie  |  by YURXZ{R}\n\n")
+    sep('=')
     row("INFO", "STATUS")
-    sep("\u251c", "\u253c", "\u2524")
-    row("\u2699  System", st_txt, YE)
-    row("\U0001f4be Memory", f"Free: {mem} ({mpct}%)", GY)
-    if mode: row("\U0001f527 Mode", " | ".join(mode), GY)
-    sep("\u251c", "\u253c", "\u2524")
+    sep('-')
+    row("[*] System", st_txt, YE)
+    row("[M] Memory", f"Free: {mem} ({mpct}%)", GY)
+    if mode: row("[~] Mode", " | ".join(mode), GY)
+    sep('-')
     row("PACKAGE", "STATUS")
-    sep("\u251c", "\u253c", "\u2524")
+    sep('-')
 
     for a in accounts:
         st  = a.get("status", "?")
         mtd = a.get("method", "auto")
-        mtd_icon = {
-            "activity": "\U0001f4cb",
-            "network":  "\U0001f310",
-            "cpu":      "\U0001f4bb",
-            "pidof":    "\U0001f50d",
-        }.get(mtd, "\u2699")
+        lbl = mtd_labels.get(mtd, "[?]")
         col = GR
         if any(x in st for x in ["Restart","Launch","Wait","Cache","Stop","Loading","Cek","Detect"]):
             col = YE
@@ -829,9 +832,9 @@ def draw_ui(accounts, sys_status, prog="", nxt_wh=""):
         elif any(x in st for x in ["Idle","Pending"]):
             col = GY
         pkg = a.get('pkg', '?')
-        row(f"  {mtd_icon} {pkg}", st, col)
+        row(f"  {lbl} {pkg}", st, col)
 
-    sep("\u2514", "\u2534", "\u2518", "\u2500")
+    sep('=')
     sys.stdout.write(f"\n{GY}  [q]=berhenti  [Ctrl+C]=force stop{R}\n")
     sys.stdout.flush()
 
@@ -1461,64 +1464,138 @@ def main():
         "13": menu_lihat_log,
     }
 
+def countdown_before_menu(label, detik=10):
+    """
+    Countdown sebelum masuk menu.
+    Enter = langsung masuk, C = batal.
+    Return True kalau lanjut, False kalau batal.
+    """
+    import select
+    tty = _open_tty()
+    src = tty if tty else sys.stdin
+    cancelled = False
+    raw_ok = False
+    try:
+        import termios, tty as ttymod
+        fd  = src.fileno()
+        old = termios.tcgetattr(fd)
+        ttymod.setraw(fd)
+        raw_ok = True
+    except:
+        pass
+    try:
+        print(f"\n  {GY}>> {WH}{label}{R}")
+        for i in range(detik, 0, -1):
+            sys.stdout.write(
+                f"\r  {GY}Masuk dalam {i}s... "
+                f"[Enter=langsung | C=batal]{R}   "
+            )
+            sys.stdout.flush()
+            ready, _, _ = select.select([src], [], [], 1)
+            if ready:
+                ch = src.read(1)
+                if isinstance(ch, bytes):
+                    try: ch = ch.decode('utf-8', errors='ignore')
+                    except: ch = ''
+                if ch.lower() == 'c':
+                    cancelled = True
+                break
+    except:
+        time.sleep(2)
+    finally:
+        if raw_ok:
+            try:
+                import termios
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            except: pass
+        if tty:
+            try: tty.close()
+            except: pass
+    sys.stdout.write("\r" + " "*55 + "\r")
+    sys.stdout.flush()
+    return not cancelled
+
+# Quick setup sequences — ketik kombinasi angka sekaligus
+# Contoh: "23" = detect packages → set PS link
+# Contoh: "231" = detect packages → set PS link → start rejoin
+QUICK_SETUP = {
+    "23":   ["2", "3"],           # Detect + Set PS
+    "231":  ["2", "3", "1"],      # Detect + Set PS + Start
+    "21":   ["2", "1"],           # Detect + Start
+    "34":   ["3", "4"],           # Set PS semua + per package
+    "234":  ["2", "3", "4"],      # Detect + PS semua + PS per pkg
+    "2341": ["2", "3", "4", "1"], # Full setup + start
+}
+
+# ==========================================================
+#  MAIN
+# ==========================================================
+def main():
+    if ARGS.auto:
+        if not check_root():
+            print(f"{RE}Root required!{R}"); sys.exit(1)
+        log("Start dengan --auto","INFO")
+        menu_start_rejoin()
+        return
+
+    MENU_FN = {
+        "1":  menu_start_rejoin,
+        "2":  menu_detect_packages,
+        "3":  menu_set_global_ps,
+        "4":  menu_set_per_pkg_ps,
+        "5":  menu_clear_config,
+        "6":  menu_list_config,
+        "7":  menu_setup_webhook,
+        "8":  menu_set_interval,
+        "9":  lambda: menu_toggle("floating_window", "Floating Window"),
+        "10": lambda: menu_toggle("auto_mute", "Auto Mute"),
+        "11": lambda: menu_toggle("auto_low_graphics", "Low Grafik"),
+        "12": menu_diagnostic,
+        "13": menu_lihat_log,
+    }
+
     while True:
         print_banner()
-        c = inp(f"  {YE}Enter choice: {R}")
+
+        # Tampilkan quick setup hints
+        sys.stdout.write(f"\n{GY}  Quick: 23=Detect+PS | 231=Detect+PS+Start | 21=Detect+Start{R}\n")
+        c = inp(f"\n  {YE}Enter choice: {R}")
+
         if c == "14":
             clear()
             print(f"{CY}Sampai jumpa!{R}\n")
             break
-        fn = MENU_FN.get(c)
-        if fn:
-            # Nama menu yang dipilih
-            label = next((l for n, l in MENU_ITEMS if n == c), f"Menu {c}")
-            # Countdown 5 detik sebelum masuk — bisa di-skip atau di-cancel
-            print(f"\n  {GY}>> {WH}{label}{R}")
-            cancelled = False
-            try:
-                import select, termios, tty as ttymod
-                tty = _open_tty()
-                src = tty if tty else sys.stdin
-                try:
-                    fd  = src.fileno()
-                    old = termios.tcgetattr(fd)
-                    ttymod.setraw(fd)
-                    raw_ok = True
-                except:
-                    raw_ok = False
-                for i in range(5, 0, -1):
-                    sys.stdout.write(
-                        f"\r  {GY}Masuk dalam {i}s... "
-                        f"[Enter=langsung | C=batal]{R}   "
-                    )
-                    sys.stdout.flush()
-                    ready, _, _ = select.select([src], [], [], 1)
-                    if ready:
-                        ch = src.read(1)
-                        if isinstance(ch, bytes):
-                            try: ch = ch.decode('utf-8', errors='ignore')
-                            except: ch = ''
-                        if ch.lower() == 'c':
-                            cancelled = True
-                        break
-                if raw_ok:
-                    try: termios.tcsetattr(fd, termios.TCSADRAIN, old)
-                    except: pass
-                if tty:
-                    try: tty.close()
-                    except: pass
-            except:
-                time.sleep(2)
-            sys.stdout.write("\r" + " "*55 + "\r")
-            sys.stdout.flush()
-            if not cancelled:
-                clear(); fn()
-            else:
+
+        # Cek quick setup
+        if c in QUICK_SETUP:
+            sequence = QUICK_SETUP[c]
+            labels = [next((l for n, l in MENU_ITEMS if n == s), f"Menu {s}") for s in sequence]
+            print(f"\n  {CY}>> Quick Setup: {' -> '.join(labels)}{R}")
+
+            if not countdown_before_menu(" -> ".join(labels), 10):
                 print(f"\n  {YE}Dibatalkan.{R}")
                 time.sleep(1)
+                continue
+
+            # Jalankan urut
+            for s in sequence:
+                fn = MENU_FN.get(s)
+                if fn:
+                    clear(); fn()
+            continue
+
+        fn = MENU_FN.get(c)
+        if fn:
+            label = next((l for n, l in MENU_ITEMS if n == c), f"Menu {c}")
+            if not countdown_before_menu(label, 10):
+                print(f"\n  {YE}Dibatalkan.{R}")
+                time.sleep(1)
+                continue
+            clear(); fn()
         else:
             print(f"\n  {RE}Pilihan tidak valid!{R}")
             time.sleep(1)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
+
