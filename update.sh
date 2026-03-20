@@ -1,7 +1,7 @@
 #!/bin/bash
 # ╔══════════════════════════════════════════════╗
 # ║   🔄 update.sh — Update dari GitHub         ║
-# ║   Roblox Auto Rejoin by YURXZ               ║
+# ║   YURXZ Rejoin v9                           ║
 # ╚══════════════════════════════════════════════╝
 
 RED='\033[0;31m'; YEL='\033[0;33m'; GRE='\033[0;32m'
@@ -17,12 +17,14 @@ BRANCH="main"
 # ─────────────────────────────────────────────────────
 
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}"
-FILES_TO_UPDATE=("main.py" "start.sh" "setup.sh" "update.sh" "cookie_import.py")
+
+# cookie_import.py dihapus — versi baru tidak pakai cookie
+FILES_TO_UPDATE=("main.py" "start.sh" "setup.sh" "update.sh")
 
 clear
 echo -e "${CYA}${BLD}"
 echo "╔══════════════════════════════════════════════╗"
-echo "║   🔄 Roblox Auto Rejoin — Updater           ║"
+echo "║   🔄 YURXZ Rejoin v9 — Updater             ║"
 echo "╚══════════════════════════════════════════════╝"
 echo -e "${RES}\n"
 
@@ -31,18 +33,14 @@ echo -e "${YEL}[1/4] Backup data penting...${RES}"
 BACKUP_DIR="$DIR/backup_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BACKUP_DIR"
 
-# Backup config.json (berisi cookie & webhook)
 if [ -f "$DIR/config.json" ]; then
     cp "$DIR/config.json" "$BACKUP_DIR/config.json"
     echo -e "${GRE}  ✓ config.json di-backup${RES}"
 fi
-
-# Backup activity.log
 if [ -f "$DIR/activity.log" ]; then
     cp "$DIR/activity.log" "$BACKUP_DIR/activity.log"
     echo -e "${GRE}  ✓ activity.log di-backup${RES}"
 fi
-
 echo -e "${GRE}  ✓ Backup tersimpan di: $BACKUP_DIR${RES}\n"
 
 # ── Cek koneksi internet ──────────────────────────────
@@ -62,11 +60,10 @@ FAIL=0
 for file in "${FILES_TO_UPDATE[@]}"; do
     URL="${RAW_BASE}/${file}"
     echo -ne "  → ${file}... "
-    
+
     HTTP_CODE=$(curl -s -o "${DIR}/${file}.new" -w "%{http_code}" "$URL" --max-time 15)
-    
+
     if [ "$HTTP_CODE" = "200" ]; then
-        # Validasi file tidak kosong
         if [ -s "${DIR}/${file}.new" ]; then
             mv "${DIR}/${file}.new" "${DIR}/${file}"
             chmod +x "${DIR}/${file}" 2>/dev/null
@@ -82,14 +79,13 @@ for file in "${FILES_TO_UPDATE[@]}"; do
         FAIL=$((FAIL+1))
     fi
 done
-
 echo ""
 
 # ── Restore config (jangan overwrite!) ───────────────
 echo -e "${YEL}[4/4] Restore config...${RES}"
 if [ -f "$BACKUP_DIR/config.json" ]; then
     cp "$BACKUP_DIR/config.json" "$DIR/config.json"
-    echo -e "${GRE}  ✓ config.json dipulihkan (cookie & webhook aman)${RES}"
+    echo -e "${GRE}  ✓ config.json dipulihkan (data aman)${RES}"
 fi
 echo ""
 

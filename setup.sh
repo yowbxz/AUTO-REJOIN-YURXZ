@@ -1,7 +1,7 @@
 #!/bin/bash
 # ╔══════════════════════════════════════════════╗
 # ║   📦 setup.sh — First Time Installer        ║
-# ║   Roblox Auto Rejoin by YURXZ               ║
+# ║   YURXZ Rejoin v9                           ║
 # ╚══════════════════════════════════════════════╝
 
 RED='\033[0;31m'; YEL='\033[0;33m'; GRE='\033[0;32m'
@@ -13,7 +13,7 @@ cd "$DIR"
 clear
 echo -e "${CYA}${BLD}"
 echo "╔══════════════════════════════════════════════╗"
-echo "║   📦 Roblox Auto Rejoin — Setup             ║"
+echo "║   📦 YURXZ Rejoin v9 — Setup               ║"
 echo "║   Android Rooted + Termux   by YURXZ        ║"
 echo "╚══════════════════════════════════════════════╝"
 echo -e "${RES}\n"
@@ -59,13 +59,15 @@ echo -e "${YEL}[4/5] Inisialisasi file...${RES}"
 if [ ! -f "$DIR/config.json" ]; then
     cat > "$DIR/config.json" << 'CFEOF'
 {
+  "packages": [],
+  "ps_links": {},
+  "global_ps_link": "",
   "check_interval": 35,
-  "restart_delay": 15,
+  "restart_delay": 10,
   "webhook_url": "",
   "floating_window": true,
   "auto_mute": true,
-  "auto_low_graphics": true,
-  "accounts": []
+  "auto_low_graphics": true
 }
 CFEOF
     echo -e "${GRE}  ✓ config.json dibuat (kosong)${RES}"
@@ -73,9 +75,8 @@ else
     echo -e "${GRE}  ✓ config.json sudah ada${RES}"
 fi
 
-touch activity.log status.json
-chmod +x "$DIR/main.py" "$DIR/start.sh" "$DIR/update.sh" \
-         "$DIR/cookie_import.py" 2>/dev/null
+touch "$DIR/activity.log" "$DIR/status.json"
+chmod +x "$DIR/main.py" "$DIR/start.sh" "$DIR/update.sh" 2>/dev/null
 echo -e "${GRE}  ✓ Permission file OK${RES}\n"
 
 # ── Selesai ───────────────────────────────────────────
@@ -84,10 +85,11 @@ echo -e "${CYA}${BLD}═══════════════════�
 echo -e "${GRE}  ✅ Instalasi berhasil!${RES}"
 echo ""
 echo -e "  Langkah selanjutnya:"
-echo -e "  ${BLD}1.${RES} Jalankan: ${CYA}python3 main.py${RES}"
-echo -e "  ${BLD}2.${RES} Pilih menu ${CYA}'1. Create Config'${RES} untuk scan cookie"
-echo -e "  ${BLD}3.${RES} Pilih menu ${CYA}'2. Start Rejoin'${RES} untuk mulai"
+echo -e "  ${BLD}1.${RES} Jalankan: ${CYA}bash start.sh${RES}"
+echo -e "  ${BLD}2.${RES} Menu ${CYA}2${RES} → Detect packages Roblox"
+echo -e "  ${BLD}3.${RES} Menu ${CYA}3${RES} → Set PS Link / Game ID"
+echo -e "  ${BLD}4.${RES} Menu ${CYA}1${RES} → Start Auto Rejoin"
 echo ""
-echo -e "  Atau pakai launcher:"
-echo -e "  ${CYA}bash start.sh${RES}"
+echo -e "  Atau langsung:"
+echo -e "  ${CYA}bash start.sh --auto${RES}"
 echo -e "${CYA}${BLD}══════════════════════════════════════${RES}\n"
