@@ -161,15 +161,32 @@ def inp(prompt, max_chars=2, timeout=60):
     return result
 
 def inp_text(prompt, timeout=120):
-    """Input teks panjang (PS Link, URL, dll) — baca sampai Enter."""
+    """
+    Input teks panjang (URL, PS Link, dll).
+    Pakai readline biasa — lebih reliable untuk teks panjang.
+    """
     sys.stdout.write(prompt)
     sys.stdout.flush()
-    tty = _open_tty()
-    result = _read_input(tty, max_chars=999, timeout=timeout)
-    if tty:
-        try: tty.close()
-        except: pass
-    return result
+    # Reset terminal ke mode normal dulu sebelum readline
+    try:
+        import termios
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        # Set ke mode canonical (normal line input)
+        new = termios.tcgetattr(fd)
+        new[3] = new[3] | termios.ECHO | termios.ICANON
+        termios.tcsetattr(fd, termios.TCSANOW, new)
+        try:
+            line = sys.stdin.readline()
+            return line.strip() if line else ""
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    except:
+        try:
+            line = sys.stdin.readline()
+            return line.strip() if line else ""
+        except:
+            return ""
 
 def pause_auto(detik=5):
     """
@@ -1298,10 +1315,23 @@ def menu_set_interval():
 def menu_toggle(key, label):
     cfg = load_cfg()
     current = cfg.get(key, True)
-    cfg[key] = not current
-    save_cfg(cfg)
-    status = f"{GR}ON ✅{R}" if cfg[key] else f"{RE}OFF ❌{R}"
-    print(f"\n{CY}{label}:{R} {status}")
+    status_now = f"{GR}ON{R}" if current else f"{RE}OFF{R}"
+    print(f"\n{CY}[ {label} ]{R}")
+    print(f"{GY}Status sekarang: {status_now}{R}")
+    print(f"\n  1. ON")
+    print(f"  2. OFF")
+    print(f"  3. Batal")
+    c = inp(f"\n{YE}Pilih: {R}")
+    if c == "1":
+        cfg[key] = True
+        save_cfg(cfg)
+        print(f"\n{GR}✓ {label}: ON{R}")
+    elif c == "2":
+        cfg[key] = False
+        save_cfg(cfg)
+        print(f"\n{RE}✓ {label}: OFF{R}")
+    else:
+        print(f"\n{YE}Dibatalkan.{R}")
     pause_auto()
 
 # ==========================================================
@@ -1515,21 +1545,38 @@ def countdown_before_menu(label, detik=10):
     sys.stdout.flush()
     return not cancelled
 
-# Quick setup sequences — ketik kombinasi angka sekaligus
-# Contoh: "23" = detect packages → set PS link
-# Contoh: "231" = detect packages → set PS link → start rejoin
-QUICK_SETUP = {
-    "23":   ["2", "3"],           # Detect + Set PS
-    "231":  ["2", "3", "1"],      # Detect + Set PS + Start
-    "21":   ["2", "1"],           # Detect + Start
-    "34":   ["3", "4"],           # Set PS semua + per package
-    "234":  ["2", "3", "4"],      # Detect + PS semua + PS per pkg
-    "2341": ["2", "3", "4", "1"], # Full setup + start
-}
-
 # ==========================================================
 #  MAIN
 # ==========================================================
+def parse_sequence(c):
+    """
+    Parse input bebas jadi sequence angka.
+    Contoh: "231" → ["2","3","1"]
+    Contoh: "10,11,1" → ["10","11","1"]
+    Contoh: "2 3 1" → ["2","3","1"]
+    Single digit/number juga tetap work.
+    """
+    # Kalau ada koma atau spasi → split
+    if ',' in c:
+        parts = [x.strip() for x in c.split(',')]
+    elif ' ' in c:
+        parts = [x.strip() for x in c.split()]
+    elif len(c) > 2:
+        # Angka nempel — parse digit per digit
+        # Handle 10-14 (2 digit): kalau ada "1" diikuti 0-4 → 2 digit
+        parts = []
+        i = 0
+        while i < len(c):
+            if c[i] == '1' and i+1 < len(c) and c[i+1] in '0123456789':
+                two = c[i:i+2]
+                if two in ['10','11','12','13','14']:
+                    parts.append(two); i += 2
+                    continue
+            parts.append(c[i]); i += 1
+    else:
+        parts = [c]
+    return [p for p in parts if p]
+
 def main():
     if ARGS.auto:
         if not check_root():
@@ -1556,45 +1603,45 @@ def main():
 
     while True:
         print_banner()
-
-        # Tampilkan quick setup hints
-        sys.stdout.write(f"\n{GY}  Quick: 23=Detect+PS | 231=Detect+PS+Start | 21=Detect+Start{R}\n")
+        sys.stdout.write(f"\n{GY}  Tip: ketik angka bebas misal 231 = Menu2+3+1 urut{R}\n")
         c = inp(f"\n  {YE}Enter choice: {R}")
 
         if c == "14":
-            clear()
-            print(f"{CY}Sampai jumpa!{R}\n")
-            break
+            clear(); print(f"{CY}Sampai jumpa!{R}\n"); break
 
-        # Cek quick setup
-        if c in QUICK_SETUP:
-            sequence = QUICK_SETUP[c]
-            labels = [next((l for n, l in MENU_ITEMS if n == s), f"Menu {s}") for s in sequence]
-            print(f"\n  {CY}>> Quick Setup: {' -> '.join(labels)}{R}")
+        sequence = parse_sequence(c)
 
-            if not countdown_before_menu(" -> ".join(labels), 10):
-                print(f"\n  {YE}Dibatalkan.{R}")
-                time.sleep(1)
-                continue
+        # Filter yang valid
+        valid = [s for s in sequence if s in MENU_FN or s == "14"]
+        invalid = [s for s in sequence if s not in MENU_FN and s != "14"]
 
-            # Jalankan urut
-            for s in sequence:
-                fn = MENU_FN.get(s)
-                if fn:
-                    clear(); fn()
+        if not valid:
+            print(f"\n  {RE}Pilihan tidak valid: {c}{R}")
+            time.sleep(1)
             continue
 
-        fn = MENU_FN.get(c)
-        if fn:
-            label = next((l for n, l in MENU_ITEMS if n == c), f"Menu {c}")
-            if not countdown_before_menu(label, 10):
-                print(f"\n  {YE}Dibatalkan.{R}")
-                time.sleep(1)
-                continue
-            clear(); fn()
-        else:
-            print(f"\n  {RE}Pilihan tidak valid!{R}")
+        if invalid:
+            print(f"\n  {YE}Pilihan tidak dikenal diabaikan: {', '.join(invalid)}{R}")
             time.sleep(1)
+
+        # Tampilkan sequence yang akan dijalankan
+        labels = [next((l for n, l in MENU_ITEMS if n == s), f"Menu {s}") for s in valid]
+        if len(valid) == 1:
+            label_str = labels[0]
+        else:
+            label_str = " -> ".join(labels)
+            print(f"\n  {CY}>> Sequence: {label_str}{R}")
+
+        if not countdown_before_menu(label_str, 10):
+            print(f"\n  {YE}Dibatalkan.{R}"); time.sleep(1); continue
+
+        # Jalankan semua urut
+        for s in valid:
+            if s == "14":
+                clear(); print(f"{CY}Sampai jumpa!{R}\n"); return
+            fn = MENU_FN.get(s)
+            if fn:
+                clear(); fn()
 
 if __name__ == '__main__':
     main()
