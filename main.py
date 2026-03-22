@@ -64,15 +64,23 @@ def log(msg, lvl="INFO"):
         pass
 
 def _open_tty():
-    """Dummy — tidak dipakai lagi."""
     return None
 
 def _read_input(tty_file, max_chars=2, timeout=60):
-    """Dummy — tidak dipakai lagi."""
     return ""
 
+def flush_stdin():
+    """Buang sisa input di buffer dengan delay kecil."""
+    try:
+        import termios
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+    except:
+        pass
+    time.sleep(0.2)
+
 def inp(prompt, max_chars=2, timeout=60):
-    """Input via input() biasa — paling kompatibel di semua terminal termasuk cloud."""
+    """Input menu."""
+    flush_stdin()
     try:
         return input(prompt).strip()
     except EOFError:
@@ -81,7 +89,8 @@ def inp(prompt, max_chars=2, timeout=60):
         raise
 
 def inp_text(prompt, timeout=120):
-    """Input teks panjang via input() biasa."""
+    """Input teks panjang — pakai input() biasa."""
+    flush_stdin()
     try:
         return input(prompt).strip()
     except EOFError:
@@ -90,13 +99,25 @@ def inp_text(prompt, timeout=120):
         raise
 
 def pause_auto(detik=5):
-    """Auto lanjut setelah beberapa detik — pakai sleep biasa."""
+    """Auto lanjut setelah beberapa detik."""
     for i in range(detik, 0, -1):
-        sys.stdout.write(f"\r  {GY}Lanjut dalam {i}s...{R}  ")
+        sys.stdout.write(f"\r  \033[90mLanjut dalam {i}s...\033[0m  ")
         sys.stdout.flush()
         time.sleep(1)
-    sys.stdout.write("\r" + " "*40 + "\r")
+    sys.stdout.write("\r" + " "*40 + "\r\n")
     sys.stdout.flush()
+
+def countdown_before_menu(label, detik=10):
+    """Countdown 10 detik sebelum masuk menu."""
+    flush_stdin()
+    print(f"\n  \033[90m>> \033[97m{label}\033[0m")
+    for i in range(detik, 0, -1):
+        sys.stdout.write(f"\r  \033[90mMasuk dalam {i}s...\033[0m   ")
+        sys.stdout.flush()
+        time.sleep(1)
+    sys.stdout.write("\r" + " "*40 + "\r\n")
+    sys.stdout.flush()
+    return True
 
 def get_memory():
     try:
@@ -1335,16 +1356,14 @@ def main():
     }
 
 def countdown_before_menu(label, detik=10):
-    """
-    Countdown sebelum masuk menu — pakai sleep biasa.
-    Return True selalu (tidak ada cancel lewat raw mode).
-    """
+    """Countdown sebelum masuk menu — flush stdin dulu supaya tidak skip."""
+    flush_stdin()
     print(f"\n  {GY}>> {WH}{label}{R}")
     for i in range(detik, 0, -1):
         sys.stdout.write(f"\r  {GY}Masuk dalam {i}s...{R}   ")
         sys.stdout.flush()
         time.sleep(1)
-    sys.stdout.write("\r" + " "*40 + "\r")
+    sys.stdout.write("\r" + " "*40 + "\r\n")
     sys.stdout.flush()
     return True
 
