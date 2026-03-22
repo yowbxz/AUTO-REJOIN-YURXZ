@@ -64,198 +64,38 @@ def log(msg, lvl="INFO"):
         pass
 
 def _open_tty():
-    """Buka /dev/tty langsung untuk input. Fallback ke sys.stdin."""
-    try:
-        return open('/dev/tty', 'r+b', buffering=0)
-    except:
-        return None
+    """Dummy — tidak dipakai lagi."""
+    return None
 
 def _read_input(tty_file, max_chars=2, timeout=60):
-    """
-    Baca input dari tty langsung pakai termios raw mode.
-    Tidak butuh Enter — tiap karakter langsung diproses.
-    """
-    import select
-    try:
-        import termios, tty as ttymod
-    except ImportError:
-        # termios tidak ada — fallback readline
-        try:
-            line = sys.stdin.readline()
-            return line.strip() if line else ""
-        except:
-            return ""
-
-    chars = []
-    fd = tty_file.fileno() if tty_file else sys.stdin.fileno()
-    src = tty_file if tty_file else sys.stdin
-
-    try:
-        old = termios.tcgetattr(fd)
-        ttymod.setraw(fd)
-    except:
-        try:
-            line = sys.stdin.readline()
-            return line.strip() if line else ""
-        except:
-            return ""
-
-    try:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            sisa = max(0.05, deadline - time.time())
-            ready, _, _ = select.select([src], [], [], sisa)
-            if not ready:
-                continue
-            ch = src.read(1)
-            if not ch:
-                break
-            # Decode bytes ke string
-            if isinstance(ch, bytes):
-                try:
-                    ch = ch.decode('utf-8', errors='ignore')
-                except:
-                    continue
-            if not ch:
-                continue
-            if ch in ('\n', '\r', '\x00'):
-                sys.stdout.write('\r\n')
-                sys.stdout.flush()
-                break
-            if ch in ('\x7f', '\x08'):
-                if chars:
-                    chars.pop()
-                    sys.stdout.write('\b \b')
-                    sys.stdout.flush()
-                continue
-            if ch == '\x03':
-                raise KeyboardInterrupt
-            if ch.isprintable():
-                chars.append(ch)
-                sys.stdout.write(ch)
-                sys.stdout.flush()
-                val = ''.join(chars)
-                # Menu 2-9 → 1 digit langsung
-                if len(chars) == 1 and val.isdigit() and val not in ('1',):
-                    break
-                # Menu 10-14 → 2 digit
-                if len(chars) >= max_chars:
-                    break
-    finally:
-        try:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        except:
-            pass
-
-    return ''.join(chars).strip()
+    """Dummy — tidak dipakai lagi."""
+    return ""
 
 def inp(prompt, max_chars=2, timeout=60):
-    """Input langsung dari /dev/tty — tidak perlu Enter, work di semua terminal."""
-    sys.stdout.write(prompt)
-    sys.stdout.flush()
-    tty = _open_tty()
-    result = _read_input(tty, max_chars=max_chars, timeout=timeout)
-    if tty:
-        try: tty.close()
-        except: pass
-    return result
+    """Input via input() biasa — paling kompatibel di semua terminal termasuk cloud."""
+    try:
+        return input(prompt).strip()
+    except EOFError:
+        return ""
+    except KeyboardInterrupt:
+        raise
 
 def inp_text(prompt, timeout=120):
-    """
-    Input teks panjang (URL, PS Link, dll).
-    Pakai readline biasa — lebih reliable untuk teks panjang.
-    """
-    sys.stdout.write(prompt)
-    sys.stdout.flush()
-    # Reset terminal ke mode normal dulu sebelum readline
+    """Input teks panjang via input() biasa."""
     try:
-        import termios
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
-        # Set ke mode canonical (normal line input)
-        new = termios.tcgetattr(fd)
-        new[3] = new[3] | termios.ECHO | termios.ICANON
-        termios.tcsetattr(fd, termios.TCSANOW, new)
-        try:
-            line = sys.stdin.readline()
-            return line.strip() if line else ""
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
-    except:
-        try:
-            line = sys.stdin.readline()
-            return line.strip() if line else ""
-        except:
-            return ""
+        return input(prompt).strip()
+    except EOFError:
+        return ""
+    except KeyboardInterrupt:
+        raise
 
 def pause_auto(detik=5):
-    """
-    Auto lanjut setelah beberapa detik.
-    - Tekan ENTER / sembarang tombol → lanjut sekarang
-    - Tekan 's' atau 'S' → STOP / tahan (tunggu input lagi)
-    """
-    import select
-    tty = _open_tty()
-    src = tty if tty else sys.stdin
-    try:
-        import termios, tty as ttymod
-        fd = src.fileno()
-        old = termios.tcgetattr(fd)
-        ttymod.setraw(fd)
-        raw_ok = True
-    except:
-        raw_ok = False
-
-    stopped = False
-    try:
-        for i in range(detik, 0, -1):
-            if stopped:
-                break
-            sys.stdout.write(
-                f"\r  {GY}Lanjut dalam {i}s... "
-                f"[Enter=lanjut | S=stop/tahan]{R}  "
-            )
-            sys.stdout.flush()
-            ready, _, _ = select.select([src], [], [], 1)
-            if ready:
-                ch = src.read(1)
-                if isinstance(ch, bytes):
-                    try: ch = ch.decode('utf-8', errors='ignore')
-                    except: ch = ''
-                if ch.lower() == 's':
-                    # Mode STOP — tahan di sini sampai user tekan Enter
-                    sys.stdout.write(
-                        f"\r  {YE}[STOP] Ditahan. Tekan Enter untuk lanjut...{R}          "
-                    )
-                    sys.stdout.flush()
-                    stopped = True
-                    # Tunggu input lagi tanpa timeout
-                    while True:
-                        r2, _, _ = select.select([src], [], [], 60)
-                        if r2:
-                            ch2 = src.read(1)
-                            if isinstance(ch2, bytes):
-                                try: ch2 = ch2.decode('utf-8', errors='ignore')
-                                except: ch2 = ''
-                            # Enter atau tombol apapun → lanjut
-                            break
-                else:
-                    # Tombol lain → lanjut sekarang
-                    break
-
-    except:
-        time.sleep(detik)
-    finally:
-        if raw_ok:
-            try:
-                termios.tcsetattr(fd, termios.TCSADRAIN, old)
-            except:
-                pass
-        if tty:
-            try: tty.close()
-            except: pass
-
-    sys.stdout.write("\r" + " "*65 + "\r")
+    """Auto lanjut setelah beberapa detik — pakai sleep biasa."""
+    for i in range(detik, 0, -1):
+        sys.stdout.write(f"\r  {GY}Lanjut dalam {i}s...{R}  ")
+        sys.stdout.flush()
+        time.sleep(1)
+    sys.stdout.write("\r" + " "*40 + "\r")
     sys.stdout.flush()
 
 def get_memory():
@@ -1496,54 +1336,17 @@ def main():
 
 def countdown_before_menu(label, detik=10):
     """
-    Countdown sebelum masuk menu.
-    Enter = langsung masuk, C = batal.
-    Return True kalau lanjut, False kalau batal.
+    Countdown sebelum masuk menu — pakai sleep biasa.
+    Return True selalu (tidak ada cancel lewat raw mode).
     """
-    import select
-    tty = _open_tty()
-    src = tty if tty else sys.stdin
-    cancelled = False
-    raw_ok = False
-    try:
-        import termios, tty as ttymod
-        fd  = src.fileno()
-        old = termios.tcgetattr(fd)
-        ttymod.setraw(fd)
-        raw_ok = True
-    except:
-        pass
-    try:
-        print(f"\n  {GY}>> {WH}{label}{R}")
-        for i in range(detik, 0, -1):
-            sys.stdout.write(
-                f"\r  {GY}Masuk dalam {i}s... "
-                f"[Enter=langsung | C=batal]{R}   "
-            )
-            sys.stdout.flush()
-            ready, _, _ = select.select([src], [], [], 1)
-            if ready:
-                ch = src.read(1)
-                if isinstance(ch, bytes):
-                    try: ch = ch.decode('utf-8', errors='ignore')
-                    except: ch = ''
-                if ch.lower() == 'c':
-                    cancelled = True
-                break
-    except:
-        time.sleep(2)
-    finally:
-        if raw_ok:
-            try:
-                import termios
-                termios.tcsetattr(fd, termios.TCSADRAIN, old)
-            except: pass
-        if tty:
-            try: tty.close()
-            except: pass
-    sys.stdout.write("\r" + " "*55 + "\r")
+    print(f"\n  {GY}>> {WH}{label}{R}")
+    for i in range(detik, 0, -1):
+        sys.stdout.write(f"\r  {GY}Masuk dalam {i}s...{R}   ")
+        sys.stdout.flush()
+        time.sleep(1)
+    sys.stdout.write("\r" + " "*40 + "\r")
     sys.stdout.flush()
-    return not cancelled
+    return True
 
 # ==========================================================
 #  MAIN
@@ -1603,39 +1406,30 @@ def main():
 
     while True:
         print_banner()
-        sys.stdout.write(f"\n{GY}  Tip: ketik angka bebas misal 231 = Menu2+3+1 urut{R}\n")
-        c = inp(f"\n  {YE}Enter choice: {R}")
+        print(f"{GY}  Tip: 231 = urut Menu2,Menu3,Menu1{R}\n")
+        c = inp(f"  {YE}Enter choice: {R}")
 
-        if c == "14":
+        if c.strip() == "14":
             clear(); print(f"{CY}Sampai jumpa!{R}\n"); break
 
-        sequence = parse_sequence(c)
+        sequence = parse_sequence(c.strip())
 
         # Filter yang valid
-        valid = [s for s in sequence if s in MENU_FN or s == "14"]
+        valid   = [s for s in sequence if s in MENU_FN or s == "14"]
         invalid = [s for s in sequence if s not in MENU_FN and s != "14"]
 
         if not valid:
-            print(f"\n  {RE}Pilihan tidak valid: {c}{R}")
-            time.sleep(1)
-            continue
+            print(f"\n  {RE}Tidak valid: {c}{R}")
+            time.sleep(2); continue
 
         if invalid:
-            print(f"\n  {YE}Pilihan tidak dikenal diabaikan: {', '.join(invalid)}{R}")
+            print(f"\n  {YE}Diabaikan: {', '.join(invalid)}{R}")
             time.sleep(1)
 
-        # Tampilkan sequence yang akan dijalankan
-        labels = [next((l for n, l in MENU_ITEMS if n == s), f"Menu {s}") for s in valid]
-        if len(valid) == 1:
-            label_str = labels[0]
-        else:
-            label_str = " -> ".join(labels)
-            print(f"\n  {CY}>> Sequence: {label_str}{R}")
+        labels    = [next((l for n, l in MENU_ITEMS if n == s), f"Menu {s}") for s in valid]
+        label_str = " -> ".join(labels)
+        countdown_before_menu(label_str, 10)
 
-        if not countdown_before_menu(label_str, 10):
-            print(f"\n  {YE}Dibatalkan.{R}"); time.sleep(1); continue
-
-        # Jalankan semua urut
         for s in valid:
             if s == "14":
                 clear(); print(f"{CY}Sampai jumpa!{R}\n"); return
