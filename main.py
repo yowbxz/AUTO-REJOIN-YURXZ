@@ -43,7 +43,18 @@ WH = "\033[97m"
 # ==========================================================
 #  HELPERS
 # ==========================================================
+def reset_terminal():
+    """Reset terminal state supaya tidak rusak setelah keluar submenu."""
+    try:
+        os.system("stty sane 2>/dev/null")
+    except:
+        pass
+    # Reset semua escape sequence
+    sys.stdout.write("\033[0m\033[?7h")
+    sys.stdout.flush()
+
 def clear():
+    reset_terminal()
     sys.stdout.write("\033[2J\033[H")
     sys.stdout.flush()
 
@@ -1424,6 +1435,7 @@ def main():
     }
 
     while True:
+        reset_terminal()  # Reset state terminal setiap kali balik ke menu
         print_banner()
         print(f"{GY}  Tip: 231 = urut Menu2,Menu3,Menu1{R}\n")
         c = inp(f"  {YE}Enter choice: {R}")
