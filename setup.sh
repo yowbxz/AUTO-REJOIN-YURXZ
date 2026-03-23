@@ -41,7 +41,7 @@ done; echo ""
 
 # [3/5] Python packages
 pr "[3/5] Install Python packages..." "$YEL"
-for pp in requests; do
+for pp in requests websocket-client; do
     pr "  -> pip install $pp..." "$YEL"
     pip3 install "$pp" -q
     pr "  v $pp" "$GRE"

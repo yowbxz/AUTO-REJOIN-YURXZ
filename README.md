@@ -6,177 +6,28 @@
 
 ## ✨ Fitur
 
-- 🔍 **Auto detect** semua package Roblox di device (murni scan, tidak hardcoded)
-- 🔄 **Auto rejoin** kalau disconnect, crash, atau freeze
-- 📋 **4 Level deteksi** dengan fallback otomatis (tanpa cookie!)
-- 📱 **Multi akun paralel** — tiap package punya thread sendiri, rejoin independen
-- 🪟 **Floating window** dengan grid layout otomatis
-- 👆 **Auto tap splash screen** — tap otomatis saat loading/intro game
-- 💉 **AutoExec script** — inject Lua ke semua executor saat masuk game
-- 🔇 **Auto mute** suara Roblox
-- 📉 **Auto low grafik** Roblox
-- 🛡️ **Protect app** anti-kill oleh sistem Android
-- 🗑️ **Clear cache aman** tidak hapus data login
-- 📡 **Discord webhook** notifikasi disconnect/rejoin + screenshot
-- 📝 **Activity log** tersimpan otomatis
-- 🔁 **Watchdog** — restart otomatis kalau script crash
-- ⌨️ **Quick sequence** — ketik `231` = jalankan menu 2,3,1 urut
+- 🔍 **Auto detect** semua package Roblox di device
+- 🔄 **Auto rejoin** paralel — tiap package thread sendiri
+- 📋 **4 Level deteksi** dengan fallback otomatis
+- 👆 **Auto tap splash screen** — tap otomatis saat loading
+- 💉 **AutoExec** — inject Lua ke semua executor saat masuk game
+- 🤖 **Discord Bot** — kontrol dari Discord pakai tombol
+- 🪟 **Floating window** grid layout otomatis
+- 🔇 **Auto mute** + 📉 **Low grafik**
+- 🛡️ **Protect app** anti-kill
+- 📡 **Discord webhook** notifikasi + screenshot
+- 🔁 **Auto boot** via Termux:Boot
 
 ---
 
-## 🔍 Sistem Deteksi (tanpa cookie)
-
-Script otomatis pilih metode terbaik yang work di HP kamu:
-
-```
-[A] Level 1 -> dumpsys activity   cek nama Activity (GameActivity?)
-[N] Level 2 -> network check      cek koneksi aktif ke server Roblox
-[C] Level 3 -> CPU usage          cek app masih aktif
-[P] Level 4 -> pidof              fallback universal (99% HP rooted)
-```
-
----
-
-## 👆 Auto Tap Splash Screen
-
-Deteksi loading screen otomatis dan tap sampai masuk game:
-
-```
-Launch Roblox
-    |
-Detect activity tiap detik
-    |
-SplashActivity / LoadingActivity -> auto tap di posisi window
-    |
-GameActivity terdeteksi! -> stop tap + inject autoexec
-```
-
-Support floating window — posisi tap otomatis sesuai letak window tiap package.
-
----
-
-## 💉 AutoExec Script
-
-Inject script Lua ke semua executor saat masuk game:
-
-- Support semua executor: Delta, Fluxus, Cryptic, CodeX, Ronix, Arceus X, Hydrogen, Vega X, Trigon, Krnl, dll
-- **Dynamic scan** — tidak hardcoded, otomatis detect executor yang terinstall
-- Support lite/clone/modded executor
-- Set delay inject sesuai loading time game (default 30 detik)
-- Untuk game loading lama seperti Fisch: set delay 35-40 detik
-
----
-
-## 📱 Multi Akun Paralel
-
-Tiap package punya **thread sendiri** — rejoin independen:
-
-```
-Package A -> Thread A -> monitor + tap + rejoin sendiri
-Package B -> Thread B -> monitor + tap + rejoin sendiri
-Package C -> Thread C -> monitor + tap + rejoin sendiri
-```
-
-Kalau package A crash, package B tetap jalan tidak terganggu.
-
----
-
-## 📋 Requirements
-
-- Android dengan **root** (Magisk / KernelSU / SuperSU)
-- **Termux** terinstall
-- **Python 3** (auto install via setup.sh)
-- `requests` (auto install via setup.sh) — untuk webhook Discord
-
----
-
-## ⚙️ Instalasi
+## ⚙️ Install (Baru)
 
 ```bash
-# Clone repo
-pkg install -y git python
+pkg update -y && pkg install -y git python
 git clone https://github.com/yowbxz/AUTO-REJOIN-YURXZ /sdcard/Download/AUTO-REJOIN-YURXZ
 cd /sdcard/Download/AUTO-REJOIN-YURXZ
-
-# Setup
 bash setup.sh
-
-# Jalankan
 bash start.sh
-```
-
----
-
-## 🚀 Cara Pakai
-
-**Setup pertama kali (quick):**
-```
-Ketik: 231
-= Menu 2 (Detect) -> Menu 3 (Set PS) -> Menu 1 (Start)
-```
-
-**Atau manual:**
-```
-Menu 2  -> Detect packages Roblox
-Menu 3  -> Set PS Link / Game ID
-Menu 12 -> Toggle Auto Tap Splash (ON)
-Menu 13 -> Set AutoExec Script
-Menu 1  -> Start Auto Rejoin
-```
-
-**Format PS Link yang diterima:**
-
-| Format | Contoh |
-|---|---|
-| Game ID | `995679412` |
-| Roblox URI | `roblox://placeId=995679412` |
-| Link game | `https://www.roblox.com/games/995679412/...` |
-| Private Server | `https://www.roblox.com/games/...?privateServerLinkCode=xxx` |
-
----
-
-## 📋 Menu
-
-| No | Menu | Fungsi |
-|---|---|---|
-| 1 | Start Auto Rejoin | Monitor & auto rejoin (paralel) |
-| 2 | Detect Packages | Scan semua package Roblox di device |
-| 3 | Set PS Link (Semua) | Set link sama untuk semua package |
-| 4 | Set PS Link per Package | Set link berbeda tiap package |
-| 5 | Clear Config | Hapus data config |
-| 6 | List Config | Lihat isi config + status |
-| 7 | Setup Webhook | Notif Discord |
-| 8 | Set Interval | Atur jeda cek |
-| 9 | Toggle Floating Window | On/Off floating |
-| 10 | Toggle Auto Mute | On/Off mute |
-| 11 | Toggle Low Grafik | On/Off low grafik |
-| 12 | Toggle Auto Tap Splash | On/Off auto tap loading screen |
-| 13 | Set AutoExec Script | Set script Lua + delay inject |
-| 14 | Diagnostic | Test metode deteksi HP ini |
-| 15 | Lihat Log | Riwayat aktivitas |
-| 16 | Exit | Keluar |
-
----
-
-## ⚡ Flag CLI
-
-```bash
-bash start.sh               # Normal
-bash start.sh --auto        # Langsung start tanpa menu
-bash start.sh --preventif   # Cek tiap 20 detik
-bash start.sh --low         # Mode hemat RAM/CPU
-```
-
-## ⌨️ Quick Sequence
-
-Ketik kombinasi angka untuk jalankan beberapa menu urut:
-
-```
-231    -> Detect + Set PS + Start
-23     -> Detect + Set PS
-21     -> Detect + Start
-2,3,1  -> sama (pakai koma)
-2 3 1  -> sama (pakai spasi)
 ```
 
 ---
@@ -187,7 +38,137 @@ Ketik kombinasi angka untuk jalankan beberapa menu urut:
 cd /sdcard/Download/AUTO-REJOIN-YURXZ && bash update.sh
 ```
 
-Config & log tidak akan hilang saat update (auto backup).
+---
+
+## 🚀 Command
+
+```bash
+# Jalankan menu + bot background
+bash start.sh
+
+# Jalankan rejoin otomatis + bot background
+bash start.sh all
+
+# Hanya bot saja
+bash start.sh bot
+
+# Stop semua
+bash start.sh stop
+# atau
+bash stop.sh
+```
+
+---
+
+## 🧪 Test / Debug
+
+```bash
+# Test main.py langsung
+cd /sdcard/Download/AUTO-REJOIN-YURXZ && python3 main.py
+
+# Test bot
+python3 bot.py
+
+# Lihat log rejoin
+tail -f /sdcard/Download/AUTO-REJOIN-YURXZ/activity.log
+
+# Lihat log bot
+tail -f /sdcard/Download/AUTO-REJOIN-YURXZ/bot.log
+
+# Cek apakah rejoin jalan
+pgrep -f main.py && echo "RUNNING" || echo "STOPPED"
+
+# Cek status
+cat /sdcard/Download/AUTO-REJOIN-YURXZ/status.json
+```
+
+---
+
+## 🤖 Discord Bot
+
+### Setup Bot
+
+```bash
+# Setup bot (sekali aja)
+cd /sdcard/Download/AUTO-REJOIN-YURXZ
+python3 bot.py setup
+```
+
+### Cara buat bot Discord
+
+1. Buka https://discord.com/developers/applications
+2. New Application → beri nama
+3. Bot → Add Bot → Copy Token
+4. Aktifkan **MESSAGE CONTENT INTENT**
+5. OAuth2 → URL Generator → `bot` + permissions:
+   Send Messages, Embed Links, Attach Files
+6. Copy URL → invite ke server
+
+### Munculin Panel di Discord
+
+```
+Ketik: !panel
+```
+
+### Tombol Panel
+
+```
+[🔧 Run Tools] [🔴 Stop Tools] [▶ Start Rejoin] [⏹ Stop Rejoin]
+[📊 Status] [⚙️ Config] [📸 Screenshot] [📜 Log] [🔄 Refresh]
+[💉 Run Script]
+```
+
+| Tombol | Fungsi |
+|---|---|
+| 🔧 Run Tools | Jalankan tools (menu muncul di Termux) |
+| 🔴 Stop Tools | Hentikan tools + rejoin |
+| ▶ Start Rejoin | Tunggu 20 detik lalu auto start rejoin |
+| ⏹ Stop Rejoin | Kirim Ctrl+C ke rejoin |
+| 📊 Status | Status tiap package |
+| ⚙️ Config | Lihat config saat ini |
+| 📸 Screenshot | Ambil screenshot layar |
+| 📜 Log | 20 baris log terakhir |
+| 💉 Run Script | Inject Lua via `!script <kode>` |
+| 🔄 Refresh | Update panel |
+
+---
+
+## 📲 Auto Boot (Termux:Boot)
+
+```bash
+# Install Termux:Boot dari F-Droid
+# Buka Termux:Boot sekali
+# Lalu:
+mkdir -p ~/.termux/boot
+cp /sdcard/Download/AUTO-REJOIN-YURXZ/yurxz_boot.sh ~/.termux/boot/yurxz.sh
+chmod +x ~/.termux/boot/yurxz.sh
+# Restart HP — otomatis jalan!
+```
+
+---
+
+## 📋 Menu Tools
+
+| No | Menu |
+|---|---|
+| 1 | Start Auto Rejoin |
+| 2 | Detect Packages Roblox |
+| 3 | Set PS Link (Semua) |
+| 4 | Set PS Link per Package |
+| 5 | Clear Config |
+| 6 | List Config |
+| 7 | Setup Webhook |
+| 8 | Set Interval |
+| 9 | Toggle Floating Window |
+| 10 | Toggle Auto Mute |
+| 11 | Toggle Low Grafik |
+| 12 | Toggle Auto Tap Splash |
+| 13 | Set AutoExec Script |
+| 14 | Diagnostic |
+| 15 | Lihat Log |
+| 16 | Exit |
+
+**Quick sequence:** ketik `231` = Menu2 + Menu3 + Menu1 urut
 
 ---
 
@@ -195,19 +176,18 @@ Config & log tidak akan hilang saat update (auto backup).
 
 | File | Fungsi |
 |---|---|
-| `main.py` | Script utama |
-| `setup.sh` | Installer dependencies |
-| `start.sh` | Launcher + watchdog |
-| `update.sh` | Update dari GitHub |
-| `config.json` | Config (auto dibuat) |
-| `activity.log` | Log aktivitas (auto dibuat) |
-| `status.json` | Status akun (auto dibuat) |
+| `main.py` | Script utama rejoin |
+| `bot.py` | Discord bot |
+| `start.sh` | Launcher |
+| `setup.sh` | Installer |
+| `update.sh` | Updater dari GitHub |
+| `yurxz_boot.sh` | Auto boot script |
 
 ---
 
 ## ⚠️ Disclaimer
 
-Script ini hanya untuk keperluan pribadi. Penggunaan tool otomatis bisa melanggar Terms of Service Roblox. Gunakan dengan bijak.
+Script ini hanya untuk keperluan pribadi. Gunakan dengan bijak.
 
 ---
 

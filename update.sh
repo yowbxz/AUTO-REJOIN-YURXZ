@@ -10,7 +10,7 @@ GITHUB_USER="yowbxz"
 GITHUB_REPO="AUTO-REJOIN-YURXZ"
 BRANCH="main"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}"
-FILES_TO_UPDATE=("main.py" "start.sh" "setup.sh" "update.sh")
+FILES_TO_UPDATE=("main.py" "start.sh" "setup.sh" "update.sh" "bot.py")
 
 W=$(tput cols 2>/dev/null || echo 44)
 [ "$W" -lt 30 ] && W=30
