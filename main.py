@@ -81,16 +81,33 @@ def _read_input(tty_file, max_chars=2, timeout=60):
     return ""
 
 def flush_stdin():
-    """Buang sisa input di buffer dengan delay kecil."""
+    """Buang sisa input di buffer — agresif."""
     try:
         import termios
         termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
     except:
         pass
+    try:
+        import select
+        while True:
+            ready, _, _ = select.select([sys.stdin], [], [], 0)
+            if not ready:
+                break
+            sys.stdin.read(1)
+    except:
+        pass
     time.sleep(0.2)
 
+def wait_enter(msg="  Tekan Enter untuk kembali ke menu"):
+    """Tunggu Enter — lebih reliable dari inp() untuk kembali ke menu."""
+    flush_stdin()
+    try:
+        input(f"{GY}{msg}: {R}")
+    except:
+        pass
+
 def inp(prompt, max_chars=2, timeout=60):
-    """Input menu."""
+    """Input menu — flush stdin dulu."""
     flush_stdin()
     try:
         return input(prompt).strip()
@@ -98,12 +115,26 @@ def inp(prompt, max_chars=2, timeout=60):
         return ""
     except KeyboardInterrupt:
         raise
+    """Input menu — flush dulu, lalu baca."""
+    flush_stdin()
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    try:
+        line = sys.stdin.readline()
+        return line.strip() if line else ""
+    except EOFError:
+        return ""
+    except KeyboardInterrupt:
+        raise
 
 def inp_text(prompt, timeout=120):
-    """Input teks panjang — pakai input() biasa."""
+    """Input teks panjang."""
     flush_stdin()
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
     try:
-        return input(prompt).strip()
+        line = sys.stdin.readline()
+        return line.strip() if line else ""
     except EOFError:
         return ""
     except KeyboardInterrupt:
@@ -896,7 +927,7 @@ def watch_package(a, cfg, accounts, sw, sh, tot, wh_url,
 def menu_start_rejoin():
     if not check_root():
         print(f"{RE}Root access required!{R}")
-        inp("\n  Tekan Enter untuk kembali ke menu: "); return
+        wait_enter(); return
 
     cfg  = load_cfg()
     pkgs = cfg.get("packages", [])
@@ -907,7 +938,7 @@ def menu_start_rejoin():
         pkgs = find_installed_pkgs()
         if not pkgs:
             print(f"{RE}Tidak ada package Roblox ditemukan!{R}")
-            inp("\n  Tekan Enter untuk kembali ke menu: "); return
+            wait_enter(); return
         cfg["packages"] = pkgs
         save_cfg(cfg)
 
@@ -920,7 +951,7 @@ def menu_start_rejoin():
         print(f"{RE}PS Link belum diset untuk:{R}")
         for m in missing: print(f"  - {m}")
         print(f"{YE}Gunakan Menu 3 atau 4 untuk set PS Link.{R}")
-        inp("\n  Tekan Enter untuk kembali ke menu: "); return
+        wait_enter(); return
 
     interval      = 20 if ARGS.preventif else cfg.get("check_interval", 35)
     restart_delay = cfg.get("restart_delay", 10)
@@ -1110,7 +1141,7 @@ def menu_detect_packages():
     found = find_installed_pkgs()
     if not found:
         print(f"{RE}Tidak ada package Roblox ditemukan!{R}")
-        inp("\n  Tekan Enter untuk kembali ke menu: "); return
+        wait_enter(); return
     print(f"{GR}Package ditemukan:{R}")
     for p in found:
         ok, out = run_root(f"dumpsys package {p} | grep versionName")
@@ -1119,7 +1150,7 @@ def menu_detect_packages():
     cfg["packages"] = found
     save_cfg(cfg)
     print(f"\n{GR}✓ {len(found)} package tersimpan ke config!{R}")
-    inp("\n  Tekan Enter untuk kembali ke menu: ")
+    wait_enter()
 
 # ==========================================================
 #  MENU 3 — SET PS LINK / GAME ID (SEMUA PACKAGE)
@@ -1193,7 +1224,7 @@ def menu_set_global_ps():
     link = input_ps_link("Set PS Link / Game ID untuk Semua Package")
     if not link:
         print(f"{YE}Dibatalkan.{R}")
-        inp("\n  Tekan Enter untuk kembali ke menu: ")
+        wait_enter()
         return
 
     cfg["global_ps_link"] = link
@@ -1205,7 +1236,7 @@ def menu_set_global_ps():
     cfg["ps_links"] = ps_links
     save_cfg(cfg)
     print(f"\n{GR}✓ Tersimpan untuk semua package!{R}")
-    inp("\n  Tekan Enter untuk kembali ke menu: ")
+    wait_enter()
 
 # ==========================================================
 #  MENU 4 — SET PS LINK PER PACKAGE
@@ -1234,7 +1265,7 @@ def menu_set_per_pkg_ps():
     cfg["packages"] = pkgs
     save_cfg(cfg)
     print(f"\n{GR}✓ PS Link per-package tersimpan!{R}")
-    inp("\n  Tekan Enter untuk kembali ke menu: ")
+    wait_enter()
 
 # ==========================================================
 #  MENU 5 — CLEAR CONFIG
@@ -1260,7 +1291,7 @@ def menu_clear_config():
         print(f"{GR}✓ Config direset total.{R}")
     else:
         print(f"{YE}Dibatalkan.{R}")
-    inp("\n  Tekan Enter untuk kembali ke menu: ")
+    wait_enter()
 
 # ==========================================================
 #  MENU 6 — LIST CONFIG
@@ -1286,7 +1317,7 @@ def menu_list_config():
     print(f"{YE}Low Grafik    :{R} {'✅' if cfg.get('auto_low_graphics') else '❌'}")
     print(f"{YE}Webhook       :{R} {cfg.get('webhook_url','(kosong)')[:50]}")
     print(f"{CY}{'='*get_term_width()}{R}")
-    inp("\n  Tekan Enter untuk kembali ke menu: ")
+    wait_enter()
 
 # ==========================================================
 #  MENU 7 — SETUP WEBHOOK
@@ -1307,7 +1338,7 @@ def menu_setup_webhook():
             print(f"{GR}✓ Test terkirim!{R}")
     else:
         print(f"{YE}Webhook dihapus.{R}")
-    inp("\n  Tekan Enter untuk kembali ke menu: ")
+    wait_enter()
 
 # ==========================================================
 #  MENU 8 — SET INTERVAL
@@ -1323,7 +1354,7 @@ def menu_set_interval():
     if val2.isdigit(): cfg["restart_delay"] = int(val2)
     save_cfg(cfg)
     print(f"{GR}✓ Tersimpan!{R}")
-    inp("\n  Tekan Enter untuk kembali ke menu: ")
+    wait_enter()
 
 # ==========================================================
 #  MENU 9, 10, 11 — TOGGLE
@@ -1348,7 +1379,7 @@ def menu_toggle(key, label):
         print(f"\n{RE}✓ {label}: OFF{R}")
     else:
         print(f"\n{YE}Dibatalkan.{R}")
-    inp("\n  Tekan Enter untuk kembali ke menu: ")
+    wait_enter()
 
 # ==========================================================
 #  MENU 12 — LIHAT LOG
@@ -1525,7 +1556,7 @@ def menu_autoexec():
     else:
         print(f"{YE}Dibatalkan.{R}")
 
-    inp("\n  Tekan Enter untuk kembali ke menu: ")
+    wait_enter()
 
 def menu_lihat_log():
     print(f"\n{CY}[ Log Aktivitas (50 baris terakhir) ]{R}\n")
@@ -1535,7 +1566,7 @@ def menu_lihat_log():
         print(out)
     else:
         print(f"{GY}Log kosong atau belum ada.{R}")
-    inp("\n  Tekan Enter untuk kembali ke menu: ")
+    wait_enter()
 
 # ==========================================================
 #  MENU 12 — DIAGNOSTIC (TEST DETEKSI HP INI)
@@ -1554,7 +1585,7 @@ def menu_diagnostic():
     print(f"    {ok_str(root_ok)}")
     if not root_ok:
         print(f"{RE}    Root tidak ada! Semua test dibatalkan.{R}")
-        inp("\n  Tekan Enter untuk kembali ke menu: "); return
+        wait_enter(); return
 
     # -- Test 2: pidof ------------------------------------
     print(f"\n{YE}[2] Command pidof...{R}")
@@ -1655,7 +1686,7 @@ def menu_diagnostic():
     }
     save_cfg(cfg)
     print(f"\n{GR}✓ Hasil diagnostic tersimpan ke config.{R}")
-    inp("\n  Tekan Enter untuk kembali ke menu: ")
+    wait_enter()
 
 # ==========================================================
 #  MAIN
