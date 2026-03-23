@@ -1141,7 +1141,7 @@ def menu_detect_packages():
     found = find_installed_pkgs()
     if not found:
         print(f"{RE}Tidak ada package Roblox ditemukan!{R}")
-        wait_enter(); return
+        pause_auto(10); return
     print(f"{GR}Package ditemukan:{R}")
     for p in found:
         ok, out = run_root(f"dumpsys package {p} | grep versionName")
@@ -1150,7 +1150,7 @@ def menu_detect_packages():
     cfg["packages"] = found
     save_cfg(cfg)
     print(f"\n{GR}✓ {len(found)} package tersimpan ke config!{R}")
-    wait_enter()
+    pause_auto(10)
 
 # ==========================================================
 #  MENU 3 — SET PS LINK / GAME ID (SEMUA PACKAGE)
