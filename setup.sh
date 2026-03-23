@@ -60,12 +60,39 @@ if [ ! -f "$DIR/config.json" ]; then
   "webhook_url": "",
   "floating_window": true,
   "auto_mute": true,
-  "auto_low_graphics": true
+  "auto_low_graphics": true,
+  "auto_tap_splash": true,
+  "tap_interval": 3,
+  "autoexec_script": "",
+  "autoexec_delay": 30
 }
 CFEOF
     pr "  v config.json dibuat" "$GRE"
 else
     pr "  v config.json sudah ada" "$GRE"
+    # Tambah field baru kalau belum ada di config lama
+    python3 -c "
+import json, sys
+try:
+    with open('$DIR/config.json') as f:
+        c = json.load(f)
+    changed = False
+    defaults = {
+        'auto_tap_splash': True,
+        'tap_interval': 3,
+        'autoexec_script': '',
+        'autoexec_delay': 30
+    }
+    for k, v in defaults.items():
+        if k not in c:
+            c[k] = v
+            changed = True
+    if changed:
+        with open('$DIR/config.json', 'w') as f:
+            json.dump(c, f, indent=2)
+        print('  v config.json diperbarui dengan field baru')
+except: pass
+" 2>/dev/null
 fi
 touch "$DIR/activity.log" "$DIR/status.json"
 chmod +x "$DIR/main.py" "$DIR/start.sh" "$DIR/update.sh" 2>/dev/null

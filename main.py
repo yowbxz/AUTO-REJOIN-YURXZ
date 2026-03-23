@@ -119,14 +119,27 @@ def pause_auto(detik=5):
     sys.stdout.flush()
 
 def countdown_before_menu(label, detik=10):
-    """Countdown 10 detik sebelum masuk menu."""
+    """
+    Countdown sebelum masuk menu.
+    Tekan Enter → langsung masuk.
+    Otomatis masuk setelah 10 detik.
+    """
+    import select
     flush_stdin()
     print(f"\n  \033[90m>> \033[97m{label}\033[0m")
+    print(f"  \033[90m[Enter = langsung masuk | tunggu {detik}s otomatis]\033[0m")
     for i in range(detik, 0, -1):
         sys.stdout.write(f"\r  \033[90mMasuk dalam {i}s...\033[0m   ")
         sys.stdout.flush()
-        time.sleep(1)
-    sys.stdout.write("\r" + " "*40 + "\r\n")
+        # Cek input non-blocking
+        try:
+            ready, _, _ = select.select([sys.stdin], [], [], 1)
+            if ready:
+                sys.stdin.readline()  # buang input
+                break
+        except:
+            time.sleep(1)
+    sys.stdout.write("\r" + " "*50 + "\r\n")
     sys.stdout.flush()
     return True
 
@@ -595,9 +608,11 @@ MENU_ITEMS = [
     ( "9",  "Toggle Floating Window"),
     ("10",  "Toggle Auto Mute"),
     ("11",  "Toggle Low Grafik"),
-    ("12",  "Diagnostic"),
-    ("13",  "Lihat Log"),
-    ("14",  "Exit"),
+    ("12",  "Toggle Auto Tap Splash"),
+    ("13",  "Set AutoExec Script"),
+    ("14",  "Diagnostic"),
+    ("15",  "Lihat Log"),
+    ("16",  "Exit"),
 ]
 
 def get_term_width():
@@ -730,10 +745,158 @@ def draw_ui(accounts, sys_status, prog="", nxt_wh=""):
 # ==========================================================
 #  MENU 1 — START AUTO REJOIN (tanpa cookie)
 # ==========================================================
+def watch_package(a, cfg, accounts, sw, sh, tot, wh_url,
+                  do_float, do_mute, do_lowgfx, stop_event):
+    """
+    Worker thread — monitor satu package secara independen.
+    Tiap package punya thread sendiri, jadi rejoin/tap paralel.
+    """
+    import threading
+
+    pkg          = a["pkg"]
+    link         = a["ps_link"]
+    ae_script    = cfg.get("autoexec_script", "")
+    ae_delay     = cfg.get("autoexec_delay", 30)
+    auto_tap     = cfg.get("auto_tap_splash", True)
+    tap_interval = cfg.get("tap_interval", 3)
+
+    # Hitung posisi tap sesuai grid bounds package ini
+    def get_tap_pos():
+        if do_float and tot > 1:
+            bounds_str = grid_bounds(a["index"], tot, sw, sh)
+            try:
+                x1, y1, x2, y2 = map(int, bounds_str.split(","))
+                return (x1 + x2) // 2, (y1 + y2) // 2
+            except:
+                pass
+        return sw // 2, sh // 2
+
+    def do_rejoin(reason):
+        """Rejoin package ini."""
+        a["rejoin_count"] = a.get("rejoin_count", 0) + 1
+        log(f"{pkg}: {reason} → Rejoin #{a['rejoin_count']}", "WARN")
+        a["status"] = f"⚠️ {reason}"
+
+        if wh_url:
+            _send_webhook_nocookie(wh_url, accounts,
+                                   f"⚠️ Disconnect: {pkg}", 15158332)
+
+        # Force stop → clear cache → launch
+        a["status"] = "Force stop..."
+        run_root(f"am force-stop {pkg}")
+        time.sleep(2)
+
+        a["status"] = "Clear cache..."
+        clear_cache_safe(pkg)
+
+        a["status"] = "Relaunching..."
+        bounds = grid_bounds(a["index"], tot, sw, sh) if do_float else None
+        launch_game(link, pkg, bounds)
+        time.sleep(5)
+
+        if do_mute:   mute_roblox()
+        if do_lowgfx: set_low_graphics(pkg)
+        protect_app(pkg)
+
+        # Auto tap + inject autoexec sampai in-game
+        cx, cy      = get_tap_pos()
+        injected_ae = False
+        game_entered= False
+        total_wait  = max(ae_delay + 10, 40)
+
+        for t in range(total_wait, 0, -1):
+            if stop_event.is_set():
+                return
+
+            # Detect activity
+            activity   = get_current_activity(pkg)
+            ingame_now = False
+            if activity:
+                for ga in INGAME_ACTIVITIES:
+                    if ga.lower() in activity.lower():
+                        ingame_now = True
+                        break
+
+            if ingame_now and not game_entered:
+                game_entered = True
+                a["status"]  = f"In-game! {activity}"
+                log(f"{pkg}: Game loaded, activity={activity}", "INFO")
+                # Inject autoexec langsung
+                if ae_script and not injected_ae:
+                    a["status"] = "Inject autoexec..."
+                    inject_autoexec(pkg, ae_script)
+                    injected_ae = True
+                break
+
+            # Auto tap selama loading
+            if auto_tap and not game_entered:
+                if t % tap_interval == 0:
+                    run_root(f"input tap {cx} {cy}")
+                    act_str = activity or "?"
+                    a["status"] = f"Tapping [{act_str}] {t}s"
+                else:
+                    a["status"] = f"Loading [{activity or '?'}] {t}s"
+
+            # Fallback inject kalau lewat ae_delay
+            if not injected_ae and t <= ae_delay and ae_script:
+                a["status"] = "Inject autoexec..."
+                inject_autoexec(pkg, ae_script)
+                injected_ae = True
+
+            time.sleep(1)
+
+        a["status"] = f"Running ✅ (rejoin #{a['rejoin_count']})"
+        if wh_url:
+            _send_webhook_nocookie(wh_url, accounts,
+                                   f"✅ Rejoin OK: {pkg}", 3066993)
+
+    # ── Main monitoring loop untuk package ini ─────────────
+    while not stop_event.is_set():
+        try:
+            # Cek 1: app running?
+            if not is_running(pkg):
+                do_rejoin("App mati / crash")
+                continue
+
+            # Cek 2: in-game?
+            ingame, activity, method = is_in_game(pkg)
+            a["method"] = method
+
+            if not ingame:
+                a["loading_count"] = a.get("loading_count", 0) + 1
+
+                # Auto tap kalau masih loading
+                if auto_tap and a["loading_count"] % tap_interval == 0:
+                    cx, cy = get_tap_pos()
+                    run_root(f"input tap {cx} {cy}")
+                    a["status"] = f"Tapping [{activity or '?'}]"
+                else:
+                    a["status"] = f"Loading [{activity or '?'}] ({a['loading_count']})"
+
+                if a["loading_count"] > 15:
+                    do_rejoin(f"Tidak in-game ({activity or method})")
+                    a["loading_count"] = 0
+            else:
+                a["loading_count"] = 0
+                protect_app(pkg)
+                if method == "activity":
+                    a["status"] = f"In-game ✅ {activity}"
+                elif method == "network":
+                    a["status"] = "In-game ✅ net"
+                elif method == "cpu":
+                    a["status"] = "Running ✅ cpu"
+                else:
+                    a["status"] = "Running ✅"
+
+        except Exception as e:
+            log(f"{pkg}: Error di watch_thread: {e}", "WARN")
+
+        time.sleep(3)  # Cek tiap 3 detik per package
+
 def menu_start_rejoin():
     if not check_root():
         print(f"{RE}Root access required!{R}")
-        pause_auto(); return
+        inp("\n  Tekan Enter untuk kembali ke menu: "); return
 
     cfg  = load_cfg()
     pkgs = cfg.get("packages", [])
@@ -744,7 +907,7 @@ def menu_start_rejoin():
         pkgs = find_installed_pkgs()
         if not pkgs:
             print(f"{RE}Tidak ada package Roblox ditemukan!{R}")
-            pause_auto(); return
+            inp("\n  Tekan Enter untuk kembali ke menu: "); return
         cfg["packages"] = pkgs
         save_cfg(cfg)
 
@@ -757,7 +920,7 @@ def menu_start_rejoin():
         print(f"{RE}PS Link belum diset untuk:{R}")
         for m in missing: print(f"  - {m}")
         print(f"{YE}Gunakan Menu 3 atau 4 untuk set PS Link.{R}")
-        pause_auto(); return
+        inp("\n  Tekan Enter untuk kembali ke menu: "); return
 
     interval      = 20 if ARGS.preventif else cfg.get("check_interval", 35)
     restart_delay = cfg.get("restart_delay", 10)
@@ -815,6 +978,15 @@ def menu_start_rejoin():
                 a["status"] = "Set low grafik..."
                 draw_ui(accounts, "Launching", f"[{i+1}/{tot}]")
                 set_low_graphics(pkg)
+            # Inject AutoExec kalau ada script — dengan delay supaya game loading selesai
+            ae_script = cfg.get("autoexec_script", "")
+            ae_delay  = cfg.get("autoexec_delay", 30)  # default 30 detik
+            if ae_script:
+                # Inject file dulu sebelum delay (supaya executor baca saat load)
+                a["status"] = "Inject autoexec..."
+                draw_ui(accounts, "Launching", f"[{i+1}/{tot}]")
+                ok_ae, _ = inject_autoexec(pkg, ae_script)
+                log(f"AutoExec pre-inject {'OK' if ok_ae else 'GAGAL'} untuk {pkg}", "INFO")
             time.sleep(3)
             protect_app(pkg)
             log(f"Launch awal {pkg} → OK", "INFO")
@@ -835,9 +1007,24 @@ def menu_start_rejoin():
     for a in accounts:
         a["status"] = "Running ✅" if is_running(a["pkg"]) else "Not Running ⚠️"
 
-    last_wh = time.time()
+    last_wh    = time.time()
+    stop_event = __import__('threading').Event()
 
-    # -- Monitoring loop -----------------------------------
+    # ── Jalankan thread per package ────────────────────────
+    import threading
+    threads = []
+    for a in accounts:
+        t = threading.Thread(
+            target=watch_package,
+            args=(a, cfg, accounts, sw, sh, tot, wh_url,
+                  do_float, do_mute, do_lowgfx, stop_event),
+            daemon=True
+        )
+        t.start()
+        threads.append(t)
+        log(f"Thread dimulai untuk {a['pkg']}", "INFO")
+
+    # ── Main loop — hanya untuk UI + webhook ───────────────
     try:
         while True:
             nxt_wh = ""
@@ -846,139 +1033,49 @@ def menu_start_rejoin():
                 if diff <= 0:
                     _send_webhook_nocookie(wh_url, accounts)
                     last_wh = time.time()
-                    diff = 600
+                    diff    = 600
                 nxt_wh = f"WH {diff//60}m"
 
-            for i, a in enumerate(accounts):
-                draw_ui(accounts, "Monitoring", f"Check [{i+1}/{tot}]", nxt_wh)
-                pkg  = a["pkg"]
-                link = a["ps_link"]
-                needs_rejoin = False
-                reason = ""
-
-                # == CEK 1: App masih running? ============
-                if not is_running(pkg):
-                    needs_rejoin = True
-                    reason = "App mati / crash"
-                    a["method"] = "pidof"
-
-                else:
-                    # == CEK 2-4: Deteksi dengan fallback =
-                    a["status"] = "Detecting..."
-                    draw_ui(accounts, "Monitoring", f"Check [{i+1}/{tot}]", nxt_wh)
-
-                    ingame, activity, method = is_in_game(pkg)
-                    a["method"] = method  # Tampilkan metode di UI
-
-                    if not ingame:
-                        # Toleransi loading / transisi
-                        if a.get("loading_count", 0) < 3:
-                            a["loading_count"] = a.get("loading_count", 0) + 1
-                            a["status"] = f"⏳ Transisi? ({a['loading_count']}/3)"
-                            continue
-                        else:
-                            needs_rejoin = True
-                            reason = f"Tidak in-game ({activity or method})"
-                            a["loading_count"] = 0
-                    else:
-                        a["loading_count"] = 0
-                        protect_app(pkg)
-
-                        # Status sesuai metode yang dipakai
-                        if method == "activity":
-                            a["status"] = f"In-game ✅ | {activity}"
-                        elif method == "network":
-                            a["status"] = "In-game ✅ | koneksi aktif"
-                        elif method == "cpu":
-                            a["status"] = "Running ✅ | CPU aktif"
-                        else:
-                            a["status"] = "Running ✅ | pidof"
-
-                # -- Rejoin --------------------------------
-                if needs_rejoin:
-                    a["rejoin_count"] += 1
-                    log(f"{pkg}: {reason} → Rejoin #{a['rejoin_count']}", "WARN")
-                    a["status"] = f"⚠️ {reason}"
-                    draw_ui(accounts, "Monitoring", f"Rejoin {pkg}", nxt_wh)
-
-                    # Webhook notif
-                    if wh_url:
-                        _send_webhook_nocookie(wh_url, accounts,
-                                               f"⚠️ Disconnect: {pkg}", 15158332)
-
-                    # Stop → clear → launch
-                    a["status"] = "Force stop..."
-                    draw_ui(accounts, "Monitoring", f"Rejoin {pkg}", nxt_wh)
-                    force_stop(pkg)
-
-                    a["status"] = "Clear cache..."
-                    draw_ui(accounts, "Monitoring", f"Rejoin {pkg}", nxt_wh)
-                    clear_cache_safe(pkg)
-
-                    a["status"] = "Relaunching..."
-                    draw_ui(accounts, "Monitoring", f"Rejoin {pkg}", nxt_wh)
-                    bounds = grid_bounds(a["index"], tot, sw, sh) if do_float else None
-                    launch_game(link, pkg, bounds)
-
-                    time.sleep(5)
-                    if do_mute:   mute_roblox()
-                    if do_lowgfx: set_low_graphics(pkg)
-                    protect_app(pkg)
-
-                    # Countdown wait start
-                    for t in range(25, 0, -1):
-                        a["status"] = f"Wait start ({t}s)"
-                        draw_ui(accounts, "Monitoring", "Wait Launch", nxt_wh)
-                        time.sleep(1)
-
-                    a["status"] = f"Running ✅ (rejoin #{a['rejoin_count']})"
-                    log(f"{pkg}: Rejoin #{a['rejoin_count']} selesai", "INFO")
-
-                    if wh_url:
-                        _send_webhook_nocookie(wh_url, accounts,
-                                               f"✅ Rejoin OK: {pkg}", 3066993)
+            draw_ui(accounts, "Monitoring", f"{tot} pkg aktif", nxt_wh)
 
             # Simpan status
             try:
                 with open(STATUS_FILE, "w") as f:
                     json.dump([{"pkg": x["pkg"], "status": x["status"],
-                                "rejoin": x["rejoin_count"]} for x in accounts], f)
+                                "rejoin": x.get("rejoin_count", 0)} for x in accounts], f)
             except:
                 pass
 
-            # Countdown idle — cek tombol q untuk berhenti
-            step = 2 if ARGS.low else 1
-            import signal
-            # Pastikan SIGINT tetap work
-            signal.signal(signal.SIGINT, signal.default_int_handler)
-            for t in range(interval, 0, -step):
-                draw_ui(accounts, "Idle", f"Next: {t}s [q=stop]", nxt_wh)
-                # Cek input non-blocking selama sleep
-                try:
-                    import select
-                    tty_q = _open_tty()
-                    src_q = tty_q if tty_q else sys.stdin
-                    ready, _, _ = select.select([src_q], [], [], step)
-                    if ready:
-                        ch = src_q.read(1)
-                        if isinstance(ch, bytes):
-                            try: ch = ch.decode('utf-8', errors='ignore')
-                            except: ch = ''
-                        if ch.lower() in ('q', '\x03', '\x1b'):
-                            if tty_q:
-                                try: tty_q.close()
-                                except: pass
-                            raise KeyboardInterrupt
-                    if tty_q:
-                        try: tty_q.close()
-                        except: pass
-                except KeyboardInterrupt:
-                    raise
-                except:
-                    time.sleep(step)
+            # Cek tombol q untuk berhenti
+            try:
+                import select
+                tty_q = _open_tty()
+                src_q = tty_q if tty_q else sys.stdin
+                ready, _, _ = select.select([src_q], [], [], 2)
+                if ready:
+                    ch = src_q.read(1)
+                    if isinstance(ch, bytes):
+                        try: ch = ch.decode('utf-8', errors='ignore')
+                        except: ch = ''
+                    if ch.lower() in ('q', '\x03', '\x1b'):
+                        if tty_q:
+                            try: tty_q.close()
+                            except: pass
+                        raise KeyboardInterrupt
+                if tty_q:
+                    try: tty_q.close()
+                    except: pass
+            except KeyboardInterrupt:
+                raise
+            except:
+                time.sleep(2)
 
     except KeyboardInterrupt:
-        print(f"\n{YE}[!] Dihentikan.{R}\n")
+        stop_event.set()
+        print(f"\n{YE}[!] Menghentikan semua thread...{R}")
+        for t in threads:
+            t.join(timeout=3)
+        print(f"{YE}[!] Dihentikan.{R}\n")
 
 def _send_webhook_nocookie(url, accounts, title="📊 Status Update", color=3447003):
     try:
@@ -1013,7 +1110,7 @@ def menu_detect_packages():
     found = find_installed_pkgs()
     if not found:
         print(f"{RE}Tidak ada package Roblox ditemukan!{R}")
-        pause_auto(); return
+        inp("\n  Tekan Enter untuk kembali ke menu: "); return
     print(f"{GR}Package ditemukan:{R}")
     for p in found:
         ok, out = run_root(f"dumpsys package {p} | grep versionName")
@@ -1022,33 +1119,83 @@ def menu_detect_packages():
     cfg["packages"] = found
     save_cfg(cfg)
     print(f"\n{GR}✓ {len(found)} package tersimpan ke config!{R}")
-    pause_auto()
+    inp("\n  Tekan Enter untuk kembali ke menu: ")
 
 # ==========================================================
 #  MENU 3 — SET PS LINK / GAME ID (SEMUA PACKAGE)
 # ==========================================================
+def input_ps_link(title="Set PS Link / Game ID"):
+    """
+    Menu pilihan format PS Link — bisa pilih 1 atau lebih format.
+    Return link yang sudah siap dipakai.
+    """
+    while True:
+        print(f"\n{CY}[ {title} ]{R}")
+        print(f"{GY}{'-'*get_term_width()}{R}")
+        print(f"  {YE}1{R}. Game ID          contoh: {GR}995679412{R}")
+        print(f"  {YE}2{R}. Roblox URI       contoh: {GR}roblox://placeId=995679412{R}")
+        print(f"  {YE}3{R}. Link game Roblox contoh: {GR}https://www.roblox.com/games/995679412{R}")
+        print(f"  {YE}4{R}. Private Server   contoh: {GR}https://www.roblox.com/games/...?privateServerLinkCode=xxx{R}")
+        print(f"  {YE}5{R}. Batal")
+        print(f"{GY}{'-'*get_term_width()}{R}")
+        pilih = inp(f"{YE}Pilih format (1-5): {R}")
+
+        if pilih == "5" or not pilih:
+            return None
+
+        if pilih == "1":
+            val = inp_text(f"{YE}Masukkan Game ID (angka): {R}")
+            if val and val.isdigit():
+                link = f"roblox://placeId={val}"
+                print(f"{GR}✓ Link: {link}{R}")
+                return link
+            else:
+                print(f"{RE}Game ID harus angka!{R}")
+
+        elif pilih == "2":
+            val = inp_text(f"{YE}Masukkan Roblox URI (roblox://...): {R}")
+            if val and val.startswith("roblox://"):
+                print(f"{GR}✓ Link: {val}{R}")
+                return val
+            else:
+                print(f"{RE}Harus diawali roblox://{R}")
+
+        elif pilih == "3":
+            val = inp_text(f"{YE}Masukkan link game Roblox: {R}")
+            if val and "roblox.com/games" in val:
+                link = parse_launch_link(val)
+                print(f"{GR}✓ Link: {link}{R}")
+                return link
+            else:
+                print(f"{RE}Link tidak valid!{R}")
+
+        elif pilih == "4":
+            val = inp_text(f"{YE}Paste Private Server link: {R}")
+            if val and "privateServerLinkCode" in val:
+                print(f"{GR}✓ Link: {val[:60]}...{R}")
+                return val
+            elif val and "roblox.com" in val:
+                print(f"{GR}✓ Link: {val[:60]}{R}")
+                return val
+            else:
+                print(f"{RE}Link tidak valid!{R}")
+        else:
+            print(f"{RE}Pilihan tidak valid!{R}")
+
+        time.sleep(1)
+
 def menu_set_global_ps():
     cfg = load_cfg()
-    print(f"\n{CY}[ Set PS Link / Game ID untuk Semua Package ]{R}")
-    print(f"{GY}{'-'*get_term_width()}{R}")
-    print(f"{GY}Format yang bisa diinput:{R}")
-    print(f"  {WH}1. Game ID biasa     {GY}→ {GR}995679412{R}")
-    print(f"  {WH}2. Roblox URI        {GY}→ {GR}roblox://placeId=995679412{R}")
-    print(f"  {WH}3. Link game Roblox  {GY}→ {GR}https://www.roblox.com/games/995679412/...{R}")
-    print(f"  {WH}4. Private Server    {GY}→ {GR}https://www.roblox.com/games/...?privateServerLinkCode=xxx{R}")
-    print(f"{GY}{'-'*get_term_width()}{R}")
     current = cfg.get("global_ps_link","")
     if current:
-        parsed = parse_launch_link(current)
-        print(f"{GY}Saat ini : {current[:55]}{R}")
-        print(f"{GY}Dikonversi: {parsed[:55]}{R}")
-    print()
-    link = inp_text(f"{YE}Masukkan PS Link / Game ID: {R}")
+        print(f"\n{GY}PS Link saat ini: {current[:60]}{R}")
+
+    link = input_ps_link("Set PS Link / Game ID untuk Semua Package")
     if not link:
-        print(f"{RE}Kosong!{R}"); pause_auto(); return
-    parsed = parse_launch_link(link)
-    print(f"\n{GY}Input    : {link[:55]}{R}")
-    print(f"{GR}Dikonversi: {parsed[:55]}{R}")
+        print(f"{YE}Dibatalkan.{R}")
+        inp("\n  Tekan Enter untuk kembali ke menu: ")
+        return
+
     cfg["global_ps_link"] = link
     pkgs     = cfg.get("packages", find_installed_pkgs())
     ps_links = cfg.get("ps_links", {})
@@ -1058,7 +1205,7 @@ def menu_set_global_ps():
     cfg["ps_links"] = ps_links
     save_cfg(cfg)
     print(f"\n{GR}✓ Tersimpan untuk semua package!{R}")
-    pause_auto()
+    inp("\n  Tekan Enter untuk kembali ke menu: ")
 
 # ==========================================================
 #  MENU 4 — SET PS LINK PER PACKAGE
@@ -1067,30 +1214,27 @@ def menu_set_per_pkg_ps():
     cfg  = load_cfg()
     pkgs = cfg.get("packages", find_installed_pkgs())
     print(f"\n{CY}[ Set PS Link / Game ID per Package ]{R}")
-    print(f"{GY}{'-'*get_term_width()}{R}")
-    print(f"{GY}Format yang bisa diinput:{R}")
-    print(f"  {WH}1. Game ID biasa  {GY}→ {GR}995679412{R}")
-    print(f"  {WH}2. Roblox URI     {GY}→ {GR}roblox://placeId=995679412{R}")
-    print(f"  {WH}3. Link game      {GY}→ {GR}https://www.roblox.com/games/...{R}")
-    print(f"  {WH}4. Private Server {GY}→ {GR}https://www.roblox.com/...?privateServerLinkCode=xxx{R}")
-    print(f"{GY}{'-'*get_term_width()}{R}\n")
     ps_links = cfg.get("ps_links", {})
     for pkg in pkgs:
         current = ps_links.get(pkg,"")
-        print(f"{CY}▶ {pkg}{R}")
+        print(f"\n{CY}>> Package: {pkg}{R}")
         if current:
             print(f"  {GY}Saat ini: {current[:55]}{R}")
-        val = inp_text(f"  {YE}Input baru (Enter skip): {R}")
-        if val:
-            parsed = parse_launch_link(val)
-            print(f"  {GR}✓ Dikonversi → {parsed[:50]}{R}")
-            ps_links[pkg] = val
-        print()
+        print(f"  {GY}(Enter skip = tidak diganti){R}")
+        skip = inp(f"  {YE}Ganti PS Link untuk package ini? (y/n): {R}").lower()
+        if skip != "y":
+            print(f"  {GY}Dilewati.{R}")
+            continue
+        link = input_ps_link(f"PS Link untuk {pkg}")
+        if link:
+            parsed = parse_launch_link(link)
+            print(f"  {GR}✓ Disimpan: {parsed[:50]}{R}")
+            ps_links[pkg] = link
     cfg["ps_links"] = ps_links
     cfg["packages"] = pkgs
     save_cfg(cfg)
-    print(f"{GR}✓ PS Link per-package tersimpan!{R}")
-    pause_auto()
+    print(f"\n{GR}✓ PS Link per-package tersimpan!{R}")
+    inp("\n  Tekan Enter untuk kembali ke menu: ")
 
 # ==========================================================
 #  MENU 5 — CLEAR CONFIG
@@ -1116,7 +1260,7 @@ def menu_clear_config():
         print(f"{GR}✓ Config direset total.{R}")
     else:
         print(f"{YE}Dibatalkan.{R}")
-    pause_auto()
+    inp("\n  Tekan Enter untuk kembali ke menu: ")
 
 # ==========================================================
 #  MENU 6 — LIST CONFIG
@@ -1142,7 +1286,7 @@ def menu_list_config():
     print(f"{YE}Low Grafik    :{R} {'✅' if cfg.get('auto_low_graphics') else '❌'}")
     print(f"{YE}Webhook       :{R} {cfg.get('webhook_url','(kosong)')[:50]}")
     print(f"{CY}{'='*get_term_width()}{R}")
-    pause_auto()
+    inp("\n  Tekan Enter untuk kembali ke menu: ")
 
 # ==========================================================
 #  MENU 7 — SETUP WEBHOOK
@@ -1163,7 +1307,7 @@ def menu_setup_webhook():
             print(f"{GR}✓ Test terkirim!{R}")
     else:
         print(f"{YE}Webhook dihapus.{R}")
-    pause_auto()
+    inp("\n  Tekan Enter untuk kembali ke menu: ")
 
 # ==========================================================
 #  MENU 8 — SET INTERVAL
@@ -1179,7 +1323,7 @@ def menu_set_interval():
     if val2.isdigit(): cfg["restart_delay"] = int(val2)
     save_cfg(cfg)
     print(f"{GR}✓ Tersimpan!{R}")
-    pause_auto()
+    inp("\n  Tekan Enter untuk kembali ke menu: ")
 
 # ==========================================================
 #  MENU 9, 10, 11 — TOGGLE
@@ -1204,11 +1348,185 @@ def menu_toggle(key, label):
         print(f"\n{RE}✓ {label}: OFF{R}")
     else:
         print(f"\n{YE}Dibatalkan.{R}")
-    pause_auto()
+    inp("\n  Tekan Enter untuk kembali ke menu: ")
 
 # ==========================================================
 #  MENU 12 — LIHAT LOG
 # ==========================================================
+def inject_autoexec(pkg, script):
+    """
+    Inject script Lua ke semua executor yang ada di device.
+    Cara kerja:
+    1. Scan semua subfolder di dalam package files
+    2. Cari folder yang ada 'autoexec' di dalamnya
+    3. Inject ke sana + path generic fallback
+    Jadi support semua executor termasuk lite/clone/modded.
+    """
+    base_data   = f"/data/data/{pkg}/files"
+    base_sdcard = f"/sdcard/Android/data/{pkg}/files"
+    escaped     = script.replace("'", "'\\''")
+    paths       = []
+    injected    = []
+
+    # ── STEP 1: Scan dinamis semua subfolder executor ──────
+    for base in [base_data, base_sdcard]:
+        # List semua subfolder di base
+        ok, out = run_root(f"ls '{base}' 2>/dev/null")
+        if ok and out.strip():
+            for folder_name in out.split():
+                folder_name = folder_name.strip()
+                if not folder_name:
+                    continue
+                sub = f"{base}/{folder_name}"
+                # Cek apakah ada folder autoexec di dalamnya
+                ok2, out2 = run_root(f"ls '{sub}' 2>/dev/null")
+                if ok2 and out2:
+                    items = out2.split()
+                    if "autoexec" in items:
+                        # Ada folder autoexec → inject ke sana
+                        paths.append(f"{sub}/autoexec/autoexec.lua")
+                    if "workspace" in items:
+                        # Ada folder workspace → inject ke sana juga
+                        paths.append(f"{sub}/workspace/autoexec.lua")
+                    # Cek file autoexec.lua langsung di subfolder
+                    if "autoexec.lua" in items:
+                        paths.append(f"{sub}/autoexec.lua")
+
+    # ── STEP 2: Path generic / fallback ───────────────────
+    for base in [base_data, base_sdcard]:
+        paths += [
+            f"{base}/autoexec.lua",
+            f"{base}/autoexec/autoexec.lua",
+            f"{base}/workspace/autoexec.lua",
+        ]
+
+    # ── STEP 3: Dedupe ────────────────────────────────────
+    paths = list(dict.fromkeys(paths))
+
+    # ── STEP 4: Inject ke semua path ──────────────────────
+    for path in paths:
+        folder = "/".join(path.split("/")[:-1])
+        run_root(f"mkdir -p '{folder}' 2>/dev/null")
+        ok, _ = run_root(f"printf '%s' '{escaped}' > '{path}' && chmod 666 '{path}'")
+        if ok:
+            injected.append(path)
+            log(f"AutoExec OK: {path}", "INFO")
+
+    log(f"AutoExec inject {len(injected)}/{len(paths)} path berhasil untuk {pkg}", "INFO")
+    return len(injected) > 0, injected
+
+def menu_autoexec():
+    cfg = load_cfg()
+    current   = cfg.get("autoexec_script", "")
+    ae_delay  = cfg.get("autoexec_delay", 30)
+
+    print(f"\n{CY}[ Set AutoExec Script ]{R}")
+    print(f"{GY}{'-'*get_term_width()}{R}")
+
+    if current:
+        preview = current[:80] + "..." if len(current) > 80 else current
+        print(f"{GY}Script: {preview}{R}")
+    else:
+        print(f"{GY}Script: (belum ada){R}")
+    print(f"{GY}Delay inject: {ae_delay} detik setelah launch{R}")
+    print()
+
+    print(f"  {YE}1{R}. Input script baru")
+    print(f"  {YE}2{R}. Load dari file (/sdcard/Download/autoexec.lua)")
+    print(f"  {YE}3{R}. Test inject ke package sekarang")
+    print(f"  {YE}4{R}. Set delay inject (detik setelah launch)")
+    print(f"  {YE}5{R}. Hapus AutoExec")
+    print(f"  {YE}6{R}. Lihat script saat ini")
+    print(f"  {YE}7{R}. Batal")
+    print(f"{GY}{'-'*get_term_width()}{R}")
+
+    c = inp(f"{YE}Pilih: {R}")
+
+    if c == "1":
+        print(f"\n{GY}Paste script Lua kamu.")
+        print(f"Ketik END di baris baru untuk selesai:{R}")
+        lines = []
+        while True:
+            try:
+                line = input()
+                if line.strip() == "END":
+                    break
+                lines.append(line)
+            except EOFError:
+                break
+        script = "\n".join(lines).strip()
+        if script:
+            cfg["autoexec_script"] = script
+            save_cfg(cfg)
+            print(f"\n{GR}✓ Script disimpan! ({len(lines)} baris){R}")
+        else:
+            print(f"{RE}Script kosong!{R}")
+
+    elif c == "2":
+        path = "/sdcard/Download/autoexec.lua"
+        ok, out = run_root(f"cat {path} 2>/dev/null")
+        if ok and out.strip():
+            cfg["autoexec_script"] = out.strip()
+            save_cfg(cfg)
+            lines = out.strip().split('\n')
+            print(f"\n{GR}✓ Script dimuat dari {path}! ({len(lines)} baris){R}")
+        else:
+            print(f"{RE}File tidak ditemukan atau kosong!{R}")
+            print(f"{GY}Buat file: /sdcard/Download/autoexec.lua{R}")
+
+    elif c == "3":
+        script = cfg.get("autoexec_script", "")
+        if not script:
+            print(f"{RE}Belum ada script! Set dulu dengan pilihan 1 atau 2.{R}")
+        else:
+            pkgs = cfg.get("packages", find_installed_pkgs())
+            if not pkgs:
+                print(f"{RE}Tidak ada package!{R}")
+            else:
+                print(f"\n{YE}Inject ke:{R}")
+                for pkg in pkgs:
+                    ok, injected = inject_autoexec(pkg, script)
+                    status = f"{GR}✓ {len(injected)} path{R}" if ok else f"{RE}✗ Gagal{R}"
+                    print(f"  {pkg}: {status}")
+                    if ok and injected:
+                        # Tampilkan beberapa path yang berhasil
+                        for p in injected[:3]:
+                            executor = p.split("/files/")[-1].split("/")[0] if "/files/" in p else "generic"
+                            print(f"    {GY}-> {executor}: {p.split('/')[-1]}{R}")
+                        if len(injected) > 3:
+                            print(f"    {GY}... dan {len(injected)-3} path lainnya{R}")
+                print(f"\n{GR}✓ Inject selesai!{R}")
+
+    elif c == "4":
+        print(f"\n{GY}Delay inject saat ini: {ae_delay} detik{R}")
+        print(f"{GY}Rekomendasi: 20-40 detik (tunggu loading game selesai){R}")
+        print(f"{GY}Untuk Fisch/game loading lama: 30-45 detik{R}")
+        val = inp_text(f"{YE}Masukkan delay (detik): {R}")
+        if val.isdigit():
+            cfg["autoexec_delay"] = int(val)
+            save_cfg(cfg)
+            print(f"\n{GR}✓ Delay diset ke {val} detik{R}")
+        else:
+            print(f"{RE}Harus angka!{R}")
+
+    elif c == "5":
+        cfg["autoexec_script"] = ""
+        save_cfg(cfg)
+        print(f"\n{YE}AutoExec dihapus.{R}")
+
+    elif c == "6":
+        script = cfg.get("autoexec_script", "")
+        if script:
+            print(f"\n{GY}Script ({len(script.split(chr(10)))} baris):{R}")
+            print(f"{WH}{script}{R}")
+        else:
+            print(f"{YE}Belum ada script.{R}")
+
+    else:
+        print(f"{YE}Dibatalkan.{R}")
+
+    inp("\n  Tekan Enter untuk kembali ke menu: ")
+
 def menu_lihat_log():
     print(f"\n{CY}[ Log Aktivitas (50 baris terakhir) ]{R}\n")
     log_path = LOG_FILE
@@ -1217,7 +1535,7 @@ def menu_lihat_log():
         print(out)
     else:
         print(f"{GY}Log kosong atau belum ada.{R}")
-    pause_auto()
+    inp("\n  Tekan Enter untuk kembali ke menu: ")
 
 # ==========================================================
 #  MENU 12 — DIAGNOSTIC (TEST DETEKSI HP INI)
@@ -1236,7 +1554,7 @@ def menu_diagnostic():
     print(f"    {ok_str(root_ok)}")
     if not root_ok:
         print(f"{RE}    Root tidak ada! Semua test dibatalkan.{R}")
-        pause_auto(); return
+        inp("\n  Tekan Enter untuk kembali ke menu: "); return
 
     # -- Test 2: pidof ------------------------------------
     print(f"\n{YE}[2] Command pidof...{R}")
@@ -1337,7 +1655,7 @@ def menu_diagnostic():
     }
     save_cfg(cfg)
     print(f"\n{GR}✓ Hasil diagnostic tersimpan ke config.{R}")
-    pause_auto()
+    inp("\n  Tekan Enter untuk kembali ke menu: ")
 
 # ==========================================================
 #  MAIN
@@ -1362,19 +1680,33 @@ def main():
         "9":  lambda: menu_toggle("floating_window", "Floating Window"),
         "10": lambda: menu_toggle("auto_mute", "Auto Mute"),
         "11": lambda: menu_toggle("auto_low_graphics", "Low Grafik"),
-        "12": menu_diagnostic,
-        "13": menu_lihat_log,
+        "12": lambda: menu_toggle("auto_tap_splash", "Auto Tap Splash"),
+        "13": menu_autoexec,
+        "14": menu_diagnostic,
+        "15": menu_lihat_log,
     }
 
 def countdown_before_menu(label, detik=10):
-    """Countdown sebelum masuk menu — flush stdin dulu supaya tidak skip."""
+    """
+    Countdown sebelum masuk menu.
+    Tekan Enter → langsung masuk.
+    Otomatis masuk setelah 10 detik.
+    """
+    import select
     flush_stdin()
     print(f"\n  {GY}>> {WH}{label}{R}")
+    print(f"  {GY}[Enter = langsung masuk | tunggu {detik}s otomatis]{R}")
     for i in range(detik, 0, -1):
         sys.stdout.write(f"\r  {GY}Masuk dalam {i}s...{R}   ")
         sys.stdout.flush()
-        time.sleep(1)
-    sys.stdout.write("\r" + " "*40 + "\r\n")
+        try:
+            ready, _, _ = select.select([sys.stdin], [], [], 1)
+            if ready:
+                sys.stdin.readline()
+                break
+        except:
+            time.sleep(1)
+    sys.stdout.write("\r" + " "*50 + "\r\n")
     sys.stdout.flush()
     return True
 
@@ -1430,8 +1762,10 @@ def main():
         "9":  lambda: menu_toggle("floating_window", "Floating Window"),
         "10": lambda: menu_toggle("auto_mute", "Auto Mute"),
         "11": lambda: menu_toggle("auto_low_graphics", "Low Grafik"),
-        "12": menu_diagnostic,
-        "13": menu_lihat_log,
+        "12": lambda: menu_toggle("auto_tap_splash", "Auto Tap Splash"),
+        "13": menu_autoexec,
+        "14": menu_diagnostic,
+        "15": menu_lihat_log,
     }
 
     while True:
@@ -1440,7 +1774,7 @@ def main():
         print(f"{GY}  Tip: 231 = urut Menu2,Menu3,Menu1{R}\n")
         c = inp(f"  {YE}Enter choice: {R}")
 
-        if c.strip() == "14":
+        if c.strip() == "16":
             clear(); print(f"{CY}Sampai jumpa!{R}\n"); break
 
         sequence = parse_sequence(c.strip())
