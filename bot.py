@@ -65,17 +65,6 @@ def load_status():
             pass
     return []
 
-def is_rejoin_running():
-    """Cek apakah main.py sedang jalan."""
-    try:
-        result = subprocess.run(
-            ["su", "-c", "pgrep -f main.py"],
-            capture_output=True, text=True
-        )
-        return bool(result.stdout.strip())
-    except:
-        return False
-
 def get_last_log(n=15):
     """Ambil N baris terakhir dari log."""
     if LOG_FILE.exists():
@@ -160,40 +149,43 @@ def start_rejoin():
         return False, f"❌ Error: {e}"
 
 def is_tools_running():
-    """Cek apakah start.sh / main.py sedang jalan."""
+    """Cek apakah main.py sedang jalan."""
     try:
-        r = subprocess.run(["su", "-c", "pgrep -f start.sh"], capture_output=True, text=True)
-        if r.stdout.strip():
-            return True
-        r2 = subprocess.run(["su", "-c", "pgrep -f main.py"], capture_output=True, text=True)
-        return bool(r2.stdout.strip())
+        r = subprocess.run(["su", "-c", "pgrep -f main.py"],
+                          capture_output=True, text=True, timeout=5)
+        return bool(r.stdout.strip())
+    except:
+        return False
+
+def is_rejoin_running():
+    """Cek apakah rejoin (main.py --auto) sedang jalan."""
+    try:
+        r = subprocess.run(["su", "-c", "pgrep -f 'main.py'"],
+                          capture_output=True, text=True, timeout=5)
+        return bool(r.stdout.strip())
     except:
         return False
 
 def stop_tools():
-    """
-    Hentikan semua — tools + rejoin sekaligus.
-    Kirim SIGINT dulu, lalu force kill kalau masih jalan.
-    """
-    if not is_tools_running() and not is_rejoin_running():
-        return False, "Tools tidak sedang jalan!"
+    """Hentikan semua — pakai bash stop.sh kalau ada, fallback pkill."""
+    stop_sh = str(BASE_DIR / "stop.sh")
     try:
-        # Stop rejoin dulu (SIGINT = Ctrl+C)
-        subprocess.run(["su", "-c", "pkill -SIGINT -f main.py"],
-                      capture_output=True, timeout=5)
-        time.sleep(2)
-        subprocess.run(["su", "-c", "pkill -SIGINT -f start.sh"],
-                      capture_output=True, timeout=5)
-        time.sleep(2)
-        subprocess.run(["su", "-c", "pkill -f main.py"],
-                      capture_output=True, timeout=5)
-        subprocess.run(["su", "-c", "pkill -f start.sh"],
-                      capture_output=True, timeout=5)
-        time.sleep(1)
+        if os.path.exists(stop_sh):
+            subprocess.run(["bash", stop_sh], capture_output=True, timeout=15)
+            time.sleep(2)
+        # Force kill semua
+        for sig in ["-SIGINT", "-9"]:
+            subprocess.run(["su", "-c", f"pkill {sig} -f main.py 2>/dev/null; pkill {sig} -f start.sh 2>/dev/null"],
+                          capture_output=True, timeout=5)
+            time.sleep(1)
         if not is_tools_running() and not is_rejoin_running():
             return True, "✅ Tools + Rejoin dihentikan!"
         else:
-            return False, "❌ Gagal stop sepenuhnya."
+            # Last resort
+            subprocess.run(["su", "-c", "killall -9 python3 2>/dev/null; true"],
+                          capture_output=True, timeout=5)
+            time.sleep(2)
+            return True, "✅ Force killed semua proses Python!"
     except Exception as e:
         return False, f"❌ Error: {e}"
 
@@ -410,30 +402,30 @@ class DiscordBot:
                     {
                         "type": 2,
                         "label": "🔧 Run Tools",
-                        "style": 2,
+                        "style": 3 if not running else 2,
                         "custom_id": "btn_run_tools",
-                        "disabled": tools,
+                        "disabled": False,  # Selalu bisa dipencet
                     },
                     {
                         "type": 2,
                         "label": "🔴 Stop Tools",
                         "style": 4,
                         "custom_id": "btn_stop_tools",
-                        "disabled": not tools,
+                        "disabled": False,  # Selalu bisa dipencet
                     },
                     {
                         "type": 2,
                         "label": "▶ Start Rejoin",
                         "style": 3,
                         "custom_id": "btn_start",
-                        "disabled": running,
+                        "disabled": False,  # Selalu bisa dipencet
                     },
                     {
                         "type": 2,
                         "label": "⏹ Stop Rejoin",
                         "style": 4,
                         "custom_id": "btn_stop",
-                        "disabled": not running,
+                        "disabled": False,  # Selalu bisa dipencet
                     },
                 ]
             },
@@ -505,6 +497,33 @@ class DiscordBot:
         self.edit_message(self.panel_msg_id, embeds=[embed],
                          components=components)
 
+    def cleanup_old_messages(self):
+        """Hapus pesan bot lama di channel kecuali panel utama."""
+        try:
+            r = self.api("get", f"/channels/{self.channel_id}/messages?limit=20")
+            if not r or r.status_code != 200:
+                return
+            msgs = r.json()
+            bot_id = None
+            # Ambil bot user id dari message
+            for m in msgs:
+                if m.get("author", {}).get("bot"):
+                    bot_id = m["author"]["id"]
+                    break
+            if not bot_id:
+                return
+            for m in msgs:
+                mid = m.get("id")
+                # Jangan hapus panel utama
+                if mid == self.panel_msg_id:
+                    continue
+                # Hapus pesan dari bot sendiri yang bukan panel
+                if m.get("author", {}).get("id") == bot_id:
+                    self.api("delete", f"/channels/{self.channel_id}/messages/{mid}")
+                    time.sleep(0.5)  # Rate limit
+        except:
+            pass
+
     def handle_interaction(self, data):
         """Handle button press."""
         interaction_id    = data.get("id")
@@ -523,49 +542,42 @@ class DiscordBot:
         print(f"{CY}[Bot] Button: {custom_id} dari user {user_id}{R}")
 
         if custom_id == "btn_run_tools":
-            self.respond_interaction(
-                interaction_id, interaction_token,
-                content="🔧 Menjalankan tools...", ephemeral=True
-            )
-            ok, msg = run_tools()
-            self.send_message(content=f"🔧 {msg}")
-            time.sleep(2)
-            self.refresh_panel()
+            # Respond dulu supaya tidak timeout
+            self.respond_interaction(interaction_id, interaction_token,
+                content="🔧 Menjalankan tools...", ephemeral=True)
+            def _run():
+                ok, msg = run_tools()
+                self.send_message(content=f"🔧 {msg}")
+                time.sleep(3); self.refresh_panel()
+            threading.Thread(target=_run, daemon=True).start()
 
         elif custom_id == "btn_stop_tools":
-            self.respond_interaction(
-                interaction_id, interaction_token,
-                content="🔴 Menghentikan tools...", ephemeral=True
-            )
-            ok, msg = stop_tools()
-            self.send_message(content=f"{'🔴' if ok else '❌'} {msg}")
-            time.sleep(2)
-            self.refresh_panel()
+            self.respond_interaction(interaction_id, interaction_token,
+                content="🔴 Menghentikan tools...", ephemeral=True)
+            def _stop_tools():
+                ok, msg = stop_tools()
+                self.send_message(content=f"{'🔴' if ok else '❌'} {msg}")
+                time.sleep(3); self.refresh_panel()
+            threading.Thread(target=_stop_tools, daemon=True).start()
 
         elif custom_id == "btn_start":
-            # Tombol 2: Start rejoin (tunggu 20 detik dulu)
-            self.respond_interaction(
-                interaction_id, interaction_token,
-                content="⏳ Tunggu 20 detik lalu kirim input ke tools...",
-                ephemeral=True
-            )
-            # Jalankan di thread supaya tidak block
-            def do_start():
+            self.respond_interaction(interaction_id, interaction_token,
+                content="⏳ Menunggu 20 detik lalu start rejoin...", ephemeral=True)
+            def _start():
                 ok, msg = start_rejoin()
                 self.send_message(content=f"{'▶' if ok else '❌'} {msg}")
-                time.sleep(2)
-                self.refresh_panel()
-            threading.Thread(target=do_start, daemon=True).start()
+                time.sleep(3); self.refresh_panel()
+            threading.Thread(target=_start, daemon=True).start()
 
         elif custom_id == "btn_stop":
-            ok, msg = stop_rejoin()
-            icon = "✅" if ok else "❌"
-            self.respond_interaction(
-                interaction_id, interaction_token,
-                content=f"{icon} {msg}", ephemeral=True
-            )
-            time.sleep(2)
-            self.refresh_panel()
+            # Respond DULU sebelum eksekusi!
+            self.respond_interaction(interaction_id, interaction_token,
+                content="⏹ Menghentikan rejoin...", ephemeral=True)
+            def _stop():
+                ok, msg = stop_rejoin()
+                self.send_message(content=f"{'✅' if ok else '❌'} {msg}")
+                time.sleep(3); self.refresh_panel()
+            threading.Thread(target=_stop, daemon=True).start()
 
         elif custom_id == "btn_status":
             status = load_status()
@@ -825,12 +837,14 @@ class DiscordBot:
             on_close=on_close,
         )
 
-        # Panel refresh loop di background
+        # Panel refresh loop — tiap 30 detik
         def auto_refresh():
             while True:
-                time.sleep(60)  # Refresh panel tiap 1 menit
+                time.sleep(30)
                 try:
                     self.refresh_panel()
+                    # Hapus pesan bot lama (selain panel utama)
+                    self.cleanup_old_messages()
                 except:
                     pass
         threading.Thread(target=auto_refresh, daemon=True).start()

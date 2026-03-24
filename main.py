@@ -702,40 +702,26 @@ def draw_ui(accounts, sys_status, prog="", nxt_wh=""):
     sys.stdout.flush()
     mem, mpct = get_memory()
 
-    # Auto detect lebar terminal — ASCII only, no emoji/unicode box
     try:
         import shutil
         W = shutil.get_terminal_size().columns
     except:
         W = int(os.environ.get("COLUMNS", 44))
-    W = max(30, W - 1)
+    W = max(28, W - 1)
+    sep  = "=" * W
+    sep2 = "-" * W
 
-    c1 = int(W * 0.58)
-    c2 = W - c1 - 3
-
-    def trunc(s, l):
+    def trunc(s, n):
         s = str(s).replace('\n','').replace('\r','')
-        # Hapus semua karakter non-ASCII supaya lebar konsisten
         s = s.encode('ascii', errors='replace').decode('ascii')
-        return s[:l-1] + "." if len(s) > l else s
-
-    def sep(ch='-'):
-        sys.stdout.write(f"{CY}+{ch*(c1+1)}+{ch*(c2+1)}+{R}\n")
-
-    def row(t1, t2, col=R):
-        t1 = t1.encode('ascii', errors='replace').decode('ascii')
-        t2 = t2.encode('ascii', errors='replace').decode('ascii')
-        sys.stdout.write(
-            f"{CY}|{R} {t1:<{c1}} "
-            f"{CY}|{col} {t2:<{c2}}{R} {CY}|{R}\n"
-        )
+        return s[:n-1] + "." if len(s) > n else s
 
     st_txt = (prog + " " if prog else "") + (sys_status or "Idle")
     if nxt_wh: st_txt += f" | {nxt_wh}"
 
     mode = []
-    if ARGS.preventif: mode.append("PREVENTIF")
-    if ARGS.low:       mode.append("LOW-PERF")
+    if ARGS.preventif: mode.append("PREV")
+    if ARGS.low:       mode.append("LOW")
 
     mtd_labels = {
         "activity": "[A]",
@@ -744,33 +730,36 @@ def draw_ui(accounts, sys_status, prog="", nxt_wh=""):
         "pidof":    "[P]",
     }
 
-    sys.stdout.write(f"\n{MG}  YURXZ Rejoin v9  |  No Cookie  |  by YURXZ{R}\n\n")
-    sep('=')
-    row("INFO", "STATUS")
-    sep('-')
-    row("[*] System", st_txt, YE)
-    row("[M] Memory", f"Free: {mem} ({mpct}%)", GY)
-    if mode: row("[~] Mode", " | ".join(mode), GY)
-    sep('-')
-    row("PACKAGE", "STATUS")
-    sep('-')
+    # Header
+    sys.stdout.write(f"{CY}{sep}{R}\n")
+    sys.stdout.write(f"{MG} YURXZ Rejoin v9  by YURXZ{R}\n")
+    sys.stdout.write(f"{CY}{sep2}{R}\n")
+    sys.stdout.write(f"{YE} {trunc(st_txt, W-2)}{R}\n")
+    sys.stdout.write(f"{GY} RAM: {mem} ({mpct}%){R}\n")
+    if mode:
+        sys.stdout.write(f"{GY} Mode: {' | '.join(mode)}{R}\n")
+    sys.stdout.write(f"{CY}{sep2}{R}\n")
 
+    # Package list — portrait: tiap package 2 baris
     for a in accounts:
         st  = a.get("status", "?")
         mtd = a.get("method", "auto")
         lbl = mtd_labels.get(mtd, "[?]")
         col = GR
-        if any(x in st for x in ["Restart","Launch","Wait","Cache","Stop","Loading","Cek","Detect"]):
+        if any(x in st for x in ["Restart","Launch","Wait","Cache","Stop","Loading","Cek","Detect","Tap","Inject"]):
             col = YE
         elif any(x in st for x in ["Error","Failed","Crash","Freeze","mati","putus"]):
             col = RE
         elif any(x in st for x in ["Idle","Pending"]):
             col = GY
-        pkg = a.get('pkg', '?')
-        row(f"  {lbl} {pkg}", st, col)
+        pkg     = a.get('pkg', '?').replace('com.roblox.', 'rb.')
+        rejoin  = a.get('rejoin_count', 0)
+        sys.stdout.write(f"{CY} {lbl}{R} {WH}{pkg}{GY} ({rejoin}x){R}\n")
+        sys.stdout.write(f"    {col}{trunc(st, W-5)}{R}\n")
+        sys.stdout.write(f"{GY} {sep2}{R}\n")
 
-    sep('=')
-    sys.stdout.write(f"\n{GY}  [q]=berhenti  [Ctrl+C]=force stop{R}\n")
+    sys.stdout.write(f"{CY}{sep}{R}\n")
+    sys.stdout.write(f"{GY} [q]=stop{R}\n")
     sys.stdout.flush()
 
 # ==========================================================
@@ -896,15 +885,19 @@ def watch_package(a, cfg, accounts, sw, sh, tot, wh_url,
             if not ingame:
                 a["loading_count"] = a.get("loading_count", 0) + 1
 
-                # Auto tap kalau masih loading
-                if auto_tap and a["loading_count"] % tap_interval == 0:
+                # Auto tap — tap SETIAP saat selama loading (bukan tiap interval)
+                # Ini penting untuk loading screen hitam seperti Fisch
+                if auto_tap:
                     cx, cy = get_tap_pos()
                     run_root(f"input tap {cx} {cy}")
-                    a["status"] = f"Tapping [{activity or '?'}]"
+                    # Tap di tengah + tap di bawah (untuk dismiss berbagai jenis splash)
+                    cy_bot = int(cy * 1.3)
+                    run_root(f"input tap {cx} {cy_bot}")
+                    a["status"] = f"Tapping [{activity or 'loading'}] {a['loading_count']}x"
                 else:
                     a["status"] = f"Loading [{activity or '?'}] ({a['loading_count']})"
 
-                if a["loading_count"] > 15:
+                if a["loading_count"] > 20:
                     do_rejoin(f"Tidak in-game ({activity or method})")
                     a["loading_count"] = 0
             else:
@@ -1044,7 +1037,7 @@ def menu_start_rejoin():
     # ── Jalankan thread per package ────────────────────────
     import threading
     threads = []
-    for a in accounts:
+    for i_t, a in enumerate(accounts):
         t = threading.Thread(
             target=watch_package,
             args=(a, cfg, accounts, sw, sh, tot, wh_url,
@@ -1054,6 +1047,9 @@ def menu_start_rejoin():
         t.start()
         threads.append(t)
         log(f"Thread dimulai untuk {a['pkg']}", "INFO")
+        # Delay antar thread supaya tidak bertabrakan
+        if i_t < len(accounts) - 1:
+            time.sleep(2)
 
     # ── Main loop — hanya untuk UI + webhook ───────────────
     try:
@@ -1298,26 +1294,44 @@ def menu_clear_config():
 # ==========================================================
 def menu_list_config():
     cfg = load_cfg()
-    print(f"\n{CY}{'='*get_term_width()}{R}")
+    W   = get_term_width()
+    sep = "=" * W
+    sep2= "-" * W
+
+    def yn(key, default=True):
+        val = cfg.get(key, default)
+        return f"{GR}ON{R}" if val else f"{RE}OFF{R}"
+
+    print(f"\n{CY}{sep}{R}")
     print(f"{CY}  LIST CONFIG{R}")
-    print(f"{CY}{'='*get_term_width()}{R}")
-    print(f"{YE}Packages ({len(cfg.get('packages',[]))}):{R}")
-    for p in cfg.get("packages",[]):
-        ps = cfg.get("ps_links",{}).get(p,"(belum diset)")
+    print(f"{CY}{sep}{R}")
+
+    pkgs = cfg.get("packages", [])
+    print(f"{YE}Packages: {len(pkgs)}{R}")
+    print(f"{CY}{sep2}{R}")
+    for p in pkgs:
+        ps      = cfg.get("ps_links", {}).get(p, "(belum diset)")
         running = is_running(p)
-        status_str = f"{GR}Running{R}" if running else f"{RE}Mati{R}"
-        print(f"  {GR}▶{R} {p}")
-        print(f"       Status : {status_str}")
-        print(f"       PS     : {ps[:60]}")
-    print(f"\n{YE}Global PS Link:{R} {cfg.get('global_ps_link','(kosong)')[:60]}")
-    print(f"{YE}Interval      :{R} {cfg.get('check_interval',35)}s")
-    print(f"{YE}Restart Delay :{R} {cfg.get('restart_delay',10)}s")
-    print(f"{YE}Floating      :{R} {'✅' if cfg.get('floating_window') else '❌'}")
-    print(f"{YE}Auto Mute     :{R} {'✅' if cfg.get('auto_mute') else '❌'}")
-    print(f"{YE}Low Grafik    :{R} {'✅' if cfg.get('auto_low_graphics') else '❌'}")
-    print(f"{YE}Webhook       :{R} {cfg.get('webhook_url','(kosong)')[:50]}")
-    print(f"{CY}{'='*get_term_width()}{R}")
-    wait_enter()
+        st      = f"{GR}Running{R}" if running else f"{RE}Mati{R}"
+        print(f"  {GR}>{R} {p}")
+        print(f"    Status : {st}")
+        print(f"    PS     : {ps[:55]}")
+    print(f"{CY}{sep2}{R}")
+    print(f"{YE}Global PS  :{R} {cfg.get('global_ps_link','(kosong)')[:55]}")
+    print(f"{YE}Interval   :{R} {cfg.get('check_interval', 35)}s")
+    print(f"{YE}Delay      :{R} {cfg.get('restart_delay', 10)}s")
+    print(f"{YE}Floating   :{R} {yn('floating_window')}")
+    print(f"{YE}Auto Mute  :{R} {yn('auto_mute')}")
+    print(f"{YE}Low Grafik :{R} {yn('auto_low_graphics')}")
+    print(f"{YE}Auto Tap   :{R} {yn('auto_tap_splash')}")
+    print(f"{YE}AE Delay   :{R} {cfg.get('autoexec_delay', 30)}s")
+    ae = cfg.get('autoexec_script', '')
+    print(f"{YE}AutoExec   :{R} {'Ada (' + str(len(ae)) + ' chars)' if ae else '(kosong)'}")
+    wh = cfg.get('webhook_url', '')
+    print(f"{YE}Webhook    :{R} {'Ada' if wh else '(kosong)'}")
+    print(f"{CY}{sep}{R}")
+    sys.stdout.flush()
+    input(f"\n{GY}  Tekan Enter untuk kembali ke menu: {R}")
 
 # ==========================================================
 #  MENU 7 — SETUP WEBHOOK
