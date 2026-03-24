@@ -29,6 +29,7 @@ BOT_CFG     = BASE_DIR / "bot_config.json"
 # ── Warna terminal ─────────────────────────────────────
 R  = "\033[0m"; CY = "\033[96m"; GR = "\033[92m"
 YE = "\033[93m"; RE = "\033[91m"; MG = "\033[95m"
+GY = "\033[90m"; WH = "\033[97m"
 
 # ═══════════════════════════════════════════════════════
 #  HELPERS
@@ -852,9 +853,9 @@ def setup_bot():
     print(f"  2. New Application -> beri nama")
     print(f"  3. Bot -> Add Bot -> Copy Token")
     print(f"  4. Bot -> Aktifkan MESSAGE CONTENT INTENT")
-    print(f"  5. OAuth2 -> URL Generator -> bot + applications.commands")
+    print(f"  5. OAuth2 -> URL Generator -> centang bot")
     print(f"     Permissions: Send Messages, Embed Links, Attach Files")
-    print(f"  6. Copy URL -> invite bot ke server\n")
+    print(f"  6. Copy Generated URL -> invite bot ke server\n")
 
     token = input(f"{YE}Masukkan Bot Token: {R}").strip()
     if not token:
@@ -873,7 +874,7 @@ def setup_bot():
     save_bot_cfg(cfg)
 
     print(f"\n{GR}✓ Config bot tersimpan!{R}")
-    print(f"{GY}Jalankan bot: python3 bot.py{R}\n")
+    print(f"{CY}Jalankan bot: python3 bot.py{R}\n")
 
 # ═══════════════════════════════════════════════════════
 #  MAIN
