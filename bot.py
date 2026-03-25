@@ -25,6 +25,15 @@ LOG_FILE    = BASE_DIR / "activity.log"
 STATUS_FILE = BASE_DIR / "status.json"
 PID_FILE    = BASE_DIR / "rejoin.pid"
 BOT_CFG     = BASE_DIR / "bot_config.json"
+BOT_LOG     = BASE_DIR / "bot.log"
+
+def bot_log(msg):
+    """Log ke file, tidak tampil di terminal."""
+    try:
+        with open(str(BOT_LOG), "a") as f:
+            f.write(f"[{time.strftime('%d/%m %H:%M:%S')}] {msg}\n")
+    except:
+        pass
 
 # ── Warna terminal ─────────────────────────────────────
 R  = "\033[0m"; CY = "\033[96m"; GR = "\033[92m"
@@ -94,123 +103,107 @@ def take_screenshot():
 # PID file untuk tools (start.sh)
 TOOLS_PID_FILE = BASE_DIR / "tools.pid"
 
+CMD_FILE = BASE_DIR / ".bot_cmd"
+
+CMD_FILE = BASE_DIR / ".bot_cmd"
+
+def write_cmd(cmd):
+    """Tulis perintah ke file yang dibaca main.py."""
+    try:
+        with open(str(CMD_FILE), "w") as f:
+            f.write(cmd)
+        return True
+    except:
+        return False
+
 def run_tools():
     """
-    Tombol 1: Jalankan bash start.sh di background.
-    Tools jalan sendiri, menu muncul di Termux.
+    Jalankan main.py --auto di background.
+    Kalau sudah jalan, tidak spawn lagi.
     """
-    start_sh = str(BASE_DIR / "start.sh")
-    if not os.path.exists(start_sh):
-        return False, "start.sh tidak ditemukan!"
+    if is_rejoin_running():
+        return False, "Tools sudah jalan!"
+    main_py = str(BASE_DIR / "main.py")
+    if not os.path.exists(main_py):
+        return False, "main.py tidak ditemukan!"
     try:
-        log_file = open(str(BASE_DIR / "tools.log"), "w")
-        proc = subprocess.Popen(
-            ["bash", start_sh],
-            cwd=str(BASE_DIR),
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True
-        )
-        with open(str(TOOLS_PID_FILE), "w") as f:
-            f.write(str(proc.pid))
-        time.sleep(2)
-        return True, f"✅ Tools dijalankan! (PID: {proc.pid})\nMenu rejoin muncul di Termux."
+        log_f = str(BASE_DIR / "tools.log")
+        cmd   = f"cd '{str(BASE_DIR)}' && nohup python3 '{main_py}' --auto >> '{log_f}' 2>&1 &"
+        subprocess.run(["su", "-c", cmd], capture_output=True, timeout=10)
+        # Tunggu sampai benar-benar jalan (max 15 detik)
+        for _ in range(15):
+            time.sleep(1)
+            if is_rejoin_running():
+                return True, "✅ Tools dimulai! Rejoin berjalan."
+        return False, "❌ Gagal start. Cek tools.log"
     except Exception as e:
         return False, f"❌ Error: {e}"
 
 def start_rejoin():
     """
-    Tombol 2: Tunggu 20 detik lalu kirim input '1' ke tools
-    supaya masuk menu Start Auto Rejoin.
+    Start rejoin:
+    - Kalau main.py belum jalan → jalankan dulu
+    - Kalau sudah jalan (mode menu) → tulis CMD_FILE 'start'
+    - Deteksi otomatis, tidak perlu tunggu 20 detik
     """
-    if not is_rejoin_running() and not is_tools_running():
-        return False, "Tools belum jalan! Tekan Run Tools dulu."
-    if is_rejoin_running():
-        return False, "Rejoin sudah jalan!"
-    try:
-        # Tunggu 20 detik supaya tools siap
-        time.sleep(20)
-        # Kirim input '1' ke stdin tools via tty
-        # Cari tty dari proses tools
-        pid = open(str(TOOLS_PID_FILE)).read().strip() if TOOLS_PID_FILE.exists() else ""
-        if pid:
-            result = subprocess.run(
-                ["su", "-c", f"echo '1' > /proc/{pid}/fd/0 2>/dev/null || true"],
-                capture_output=True, timeout=5
-            )
-        # Fallback: tulis ke semua tty yang ada tools
-        subprocess.run(
-            ["su", "-c", "for tty in $(ls /proc/$(pgrep -f main.py | head -1)/fd/ 2>/dev/null); do echo '1' > /proc/$(pgrep -f main.py | head -1)/fd/$tty 2>/dev/null; done; true"],
-            capture_output=True, timeout=5
-        )
-        time.sleep(3)
-        return True, "✅ Input '1' dikirim ke tools!\nRejoin seharusnya dimulai."
-    except Exception as e:
-        return False, f"❌ Error: {e}"
+    if not is_rejoin_running():
+        # Belum jalan → jalankan dulu
+        return run_tools()
+    # Sudah jalan → kirim perintah start via CMD_FILE
+    # main.py akan baca dan jalankan menu 1
+    if write_cmd("start"):
+        return True, "✅ Perintah start dikirim ke tools!"
+    return False, "❌ Gagal kirim perintah."
 
 def is_tools_running():
-    """Cek apakah main.py sedang jalan."""
-    try:
-        r = subprocess.run(["su", "-c", "pgrep -f main.py"],
-                          capture_output=True, text=True, timeout=5)
-        return bool(r.stdout.strip())
-    except:
-        return False
+    """Cek apakah main.py jalan."""
+    return is_rejoin_running()
 
 def is_rejoin_running():
-    """Cek apakah rejoin (main.py --auto) sedang jalan."""
+    """Cek apakah main.py sedang jalan (bukan bot.py)."""
     try:
-        r = subprocess.run(["su", "-c", "pgrep -f 'main.py'"],
-                          capture_output=True, text=True, timeout=5)
+        r = subprocess.run(
+            ["su", "-c", "pgrep -af python3 2>/dev/null | grep 'main.py' | grep -v 'bot.py' | grep -v grep"],
+            capture_output=True, text=True, timeout=5
+        )
         return bool(r.stdout.strip())
     except:
         return False
 
 def stop_tools():
-    """Hentikan semua — pakai bash stop.sh kalau ada, fallback pkill."""
-    stop_sh = str(BASE_DIR / "stop.sh")
+    """Hentikan semua — tulis CMD_FILE stop + force kill."""
+    # Coba graceful dulu via CMD_FILE
+    write_cmd("stop")
+    time.sleep(2)
+    # Force kill
     try:
-        if os.path.exists(stop_sh):
-            subprocess.run(["bash", stop_sh], capture_output=True, timeout=15)
-            time.sleep(2)
-        # Force kill semua
-        for sig in ["-SIGINT", "-9"]:
-            subprocess.run(["su", "-c", f"pkill {sig} -f main.py 2>/dev/null; pkill {sig} -f start.sh 2>/dev/null"],
-                          capture_output=True, timeout=5)
+        for sig in ["-SIGINT", "-SIGTERM", "-9"]:
+            subprocess.run(
+                ["su", "-c", f"pkill {sig} -f main.py 2>/dev/null; true"],
+                capture_output=True, timeout=5
+            )
             time.sleep(1)
-        if not is_tools_running() and not is_rejoin_running():
-            return True, "✅ Tools + Rejoin dihentikan!"
-        else:
-            # Last resort
-            subprocess.run(["su", "-c", "killall -9 python3 2>/dev/null; true"],
-                          capture_output=True, timeout=5)
-            time.sleep(2)
-            return True, "✅ Force killed semua proses Python!"
+            if not is_rejoin_running():
+                break
+        return True, "✅ Tools dihentikan!"
     except Exception as e:
         return False, f"❌ Error: {e}"
 
 def stop_rejoin():
-    """
-    Tombol 3: Kirim SIGINT ke main.py — sama seperti Ctrl+C.
-    Hanya stop rejoin, tools tetap jalan.
-    """
+    """Stop rejoin — kirim CMD_FILE stop."""
     if not is_rejoin_running():
-        return False, "Rejoin tidak sedang jalan!"
-    try:
-        # SIGINT = Ctrl+C
-        subprocess.run(["su", "-c", "pkill -SIGINT -f main.py"],
-                      capture_output=True, timeout=5)
-        time.sleep(3)
-        if is_rejoin_running():
-            subprocess.run(["su", "-c", "pkill -f main.py"],
-                          capture_output=True, timeout=5)
-            time.sleep(2)
-        if not is_rejoin_running():
-            return True, "✅ Rejoin dihentikan! (Ctrl+C)"
-        else:
-            return False, "❌ Gagal stop."
-    except Exception as e:
-        return False, f"❌ Error: {e}"
+        return False, "Tools tidak sedang jalan!"
+    write_cmd("stop")
+    time.sleep(2)
+    if not is_rejoin_running():
+        return True, "✅ Rejoin dihentikan!"
+    # Force kill kalau masih jalan
+    subprocess.run(["su", "-c", "pkill -SIGINT -f main.py 2>/dev/null; true"],
+                  capture_output=True, timeout=5)
+    time.sleep(2)
+    subprocess.run(["su", "-c", "pkill -9 -f main.py 2>/dev/null; true"],
+                  capture_output=True, timeout=5)
+    return True, "✅ Rejoin force stopped!"
 
 def run_lua_script(script_text, pkg=None):
     """Inject script Lua ke executor."""
@@ -484,7 +477,7 @@ class DiscordBot:
         msg_id     = self.send_message(embeds=[embed], components=components)
         if msg_id:
             self.panel_msg_id = msg_id
-            print(f"{GR}[Bot] Panel dikirim ke channel!{R}")
+            bot_log("Panel dikirim ke channel")
         return msg_id
 
     def refresh_panel(self):
@@ -498,29 +491,34 @@ class DiscordBot:
                          components=components)
 
     def cleanup_old_messages(self):
-        """Hapus pesan bot lama di channel kecuali panel utama."""
+        """Hapus pesan bot biasa, panel utama tidak dihapus."""
         try:
             r = self.api("get", f"/channels/{self.channel_id}/messages?limit=20")
             if not r or r.status_code != 200:
                 return
             msgs = r.json()
             bot_id = None
-            # Ambil bot user id dari message
             for m in msgs:
                 if m.get("author", {}).get("bot"):
                     bot_id = m["author"]["id"]
                     break
             if not bot_id:
                 return
+            deleted = 0
             for m in msgs:
                 mid = m.get("id")
-                # Jangan hapus panel utama
                 if mid == self.panel_msg_id:
-                    continue
-                # Hapus pesan dari bot sendiri yang bukan panel
+                    continue  # Jangan hapus panel utama
                 if m.get("author", {}).get("id") == bot_id:
-                    self.api("delete", f"/channels/{self.channel_id}/messages/{mid}")
-                    time.sleep(0.5)  # Rate limit
+                    # Hanya hapus pesan teks biasa (bukan embed panel)
+                    has_embed = bool(m.get("embeds"))
+                    has_components = bool(m.get("components"))
+                    if not has_components:  # Hapus pesan tanpa tombol
+                        self.api("delete", f"/channels/{self.channel_id}/messages/{mid}")
+                        deleted += 1
+                        time.sleep(0.5)
+                        if deleted >= 5:  # Max 5 pesan per cleanup
+                            break
         except:
             pass
 
@@ -539,7 +537,7 @@ class DiscordBot:
             )
             return
 
-        print(f"{CY}[Bot] Button: {custom_id} dari user {user_id}{R}")
+        bot_log(f"Button: {custom_id} dari user {user_id}")
 
         if custom_id == "btn_run_tools":
             # Respond dulu supaya tidak timeout
@@ -695,11 +693,21 @@ class DiscordBot:
             )
 
         elif custom_id == "btn_refresh":
-            self.respond_interaction(
-                interaction_id, interaction_token,
-                content="🔄 Refreshing panel...", ephemeral=True
-            )
-            self.refresh_panel()
+            # Respond dulu dengan update panel langsung (type 7 = update message)
+            embed      = self.build_panel_embed()
+            components = self.build_main_buttons()
+            payload = {
+                "type": 7,  # UPDATE_MESSAGE — langsung update panel
+                "data": {
+                    "embeds":     [embed],
+                    "components": components,
+                }
+            }
+            url = f"{DISCORD_API}/interactions/{interaction_id}/{interaction_token}/callback"
+            try:
+                requests.post(url, headers=self.headers, json=payload, timeout=10)
+            except:
+                pass
 
     def handle_message(self, data):
         """Handle pesan !script."""
@@ -743,7 +751,7 @@ class DiscordBot:
         session_id         = None
 
         def on_open(ws):
-            print(f"{GR}[Bot] WebSocket terhubung!{R}")
+            bot_log("WebSocket terhubung")
 
         def on_message(ws, message):
             nonlocal heartbeat_interval, sequence, session_id
@@ -790,7 +798,7 @@ class DiscordBot:
                     if t == "READY":
                         session_id = d.get("session_id")
                         user = d.get("user", {})
-                        print(f"{GR}[Bot] Login sebagai {user.get('username')}#{user.get('discriminator')}{R}")
+                        bot_log(f"Login sebagai {user.get('username')}#{user.get('discriminator')}")
                         # Kirim panel saat bot ready
                         threading.Thread(
                             target=self.send_panel, daemon=True
@@ -818,14 +826,14 @@ class DiscordBot:
                     pass
 
             except Exception as e:
-                print(f"{RE}[Bot] Error handle message: {e}{R}")
+                bot_log(f"Error: {e}")
 
         def on_error(ws, error):
-            print(f"{RE}[Bot] WebSocket error: {error}{R}")
+            bot_log(f"WS Error: {error}")
 
         def on_close(ws, code, msg):
-            print(f"{YE}[Bot] WebSocket closed: {code} {msg}{R}")
-            print(f"{YE}[Bot] Reconnect dalam 10 detik...{R}")
+            bot_log(f"WS Closed: {code}")
+            bot_log("Reconnect dalam 10 detik...")
             time.sleep(10)
             self.run_gateway()  # Reconnect
 
@@ -837,14 +845,18 @@ class DiscordBot:
             on_close=on_close,
         )
 
-        # Panel refresh loop — tiap 30 detik
+        # Panel refresh tiap 30 detik, cleanup tiap 5 menit
+        cleanup_counter = 0
         def auto_refresh():
+            nonlocal cleanup_counter
             while True:
                 time.sleep(30)
                 try:
                     self.refresh_panel()
-                    # Hapus pesan bot lama (selain panel utama)
-                    self.cleanup_old_messages()
+                    cleanup_counter += 1
+                    if cleanup_counter >= 10:  # tiap 10x refresh = 5 menit
+                        self.cleanup_old_messages()
+                        cleanup_counter = 0
                 except:
                     pass
         threading.Thread(target=auto_refresh, daemon=True).start()
@@ -925,7 +937,7 @@ def main():
         owner_ids  = cfg.get("owner_ids", [])
     )
 
-    print(f"{GR}[Bot] Connecting to Discord...{R}\n")
+    print(f"{GR}[Bot] Connecting to Discord...{R}\n")  # Keep startup message
     try:
         bot.run_gateway()
     except KeyboardInterrupt:

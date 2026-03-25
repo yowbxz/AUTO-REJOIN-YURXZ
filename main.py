@@ -29,6 +29,7 @@ BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 LOG_FILE    = os.path.join(BASE_DIR, "activity.log")
 STATUS_FILE = os.path.join(BASE_DIR, "status.json")
+CMD_FILE    = os.path.join(BASE_DIR, ".bot_cmd")   # File perintah dari bot
 
 # --- WARNA -------------------------------------------------
 R  = "\033[0m"
@@ -81,30 +82,23 @@ def _read_input(tty_file, max_chars=2, timeout=60):
     return ""
 
 def flush_stdin():
-    """Buang sisa input di buffer — agresif."""
+    """Buang sisa input di buffer."""
     try:
         import termios
         termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
     except:
         pass
-    try:
-        import select
-        while True:
-            ready, _, _ = select.select([sys.stdin], [], [], 0)
-            if not ready:
-                break
-            sys.stdin.read(1)
-    except:
-        pass
-    time.sleep(0.2)
+    time.sleep(0.3)
 
 def wait_enter(msg="  Tekan Enter untuk kembali ke menu"):
-    """Tunggu Enter — lebih reliable dari inp() untuk kembali ke menu."""
+    """Tunggu Enter."""
     flush_stdin()
     try:
-        input(f"{GY}{msg}: {R}")
+        sys.stdout.write(f"\n{GY}{msg}: {R}")
+        sys.stdout.flush()
+        sys.stdin.readline()
     except:
-        pass
+        time.sleep(3)
 
 def inp(prompt, max_chars=2, timeout=60):
     """Input menu — flush stdin dulu."""
@@ -269,12 +263,37 @@ def find_installed_pkgs():
     return installed
 
 def is_running(pkg):
-    """Cek apakah package Roblox sedang running."""
-    ok, out = run_root(f"pidof {pkg}")
+    """
+    Cek apakah package Roblox sedang running.
+    Kalau salah satu metode bilang RUNNING → return True.
+    Kalau SEMUA metode bilang mati → return False.
+    """
+    # Metode 1: pidof — paling cepat dan akurat
+    ok, out = run_root(f"pidof '{pkg}' 2>/dev/null")
     if ok and out.strip():
         return True
-    ok, out = run_root(f"ps -A | grep {pkg}")
-    return ok and bool(out.strip())
+
+    # Metode 2: ps -ef
+    ok, out = run_root(f"ps -ef 2>/dev/null | grep '{pkg}' | grep -v grep")
+    if ok and pkg in (out or ""):
+        return True
+
+    # Metode 3: dumpsys activity processes — paling reliable Android 10+
+    ok, out = run_root(f"dumpsys activity processes 2>/dev/null | grep '{pkg}'")
+    if ok and pkg in (out or ""):
+        return True
+
+    # Metode 4: cmd activity list-tasks
+    ok, out = run_root(f"cmd activity list-tasks 2>/dev/null | grep '{pkg}'")
+    if ok and pkg in (out or ""):
+        return True
+
+    # Metode 5: /proc scan — paling reliable untuk force close
+    ok, out = run_root(f"grep -r '{pkg}' /proc/*/cmdline 2>/dev/null | head -1")
+    if ok and pkg in (out or ""):
+        return True
+
+    return False
 
 def get_pid(pkg):
     ok, out = run_root(f"pidof {pkg}")
@@ -848,14 +867,17 @@ def watch_package(a, cfg, accounts, sw, sh, tot, wh_url,
                     injected_ae = True
                 break
 
-            # Auto tap selama loading
+            # Auto tap selama loading — tiap detik, semua posisi
             if auto_tap and not game_entered:
-                if t % tap_interval == 0:
-                    run_root(f"input tap {cx} {cy}")
-                    act_str = activity or "?"
-                    a["status"] = f"Tapping [{act_str}] {t}s"
-                else:
-                    a["status"] = f"Loading [{activity or '?'}] {t}s"
+                # Bawa ke foreground
+                run_root(f"am start -n {pkg}/com.roblox.client.ActivityProtocolLaunch 2>/dev/null; true")
+                time.sleep(0.2)
+                # Tap banyak posisi
+                for tap_y in [cy, int(sh * 0.85), int(sh * 0.7), int(sh * 0.5)]:
+                    run_root(f"input tap {cx} {tap_y}")
+                    time.sleep(0.05)
+                act_str = activity or "loading"
+                a["status"] = f"Tapping [{act_str}] {t}s"
 
             # Fallback inject kalau lewat ae_delay
             if not injected_ae and t <= ae_delay and ae_script:
@@ -885,20 +907,30 @@ def watch_package(a, cfg, accounts, sw, sh, tot, wh_url,
             if not ingame:
                 a["loading_count"] = a.get("loading_count", 0) + 1
 
-                # Auto tap — tap SETIAP saat selama loading (bukan tiap interval)
-                # Ini penting untuk loading screen hitam seperti Fisch
                 if auto_tap:
                     cx, cy = get_tap_pos()
-                    run_root(f"input tap {cx} {cy}")
-                    # Tap di tengah + tap di bawah (untuk dismiss berbagai jenis splash)
-                    cy_bot = int(cy * 1.3)
-                    run_root(f"input tap {cx} {cy_bot}")
-                    a["status"] = f"Tapping [{activity or 'loading'}] {a['loading_count']}x"
+
+                    # Bawa Roblox ke foreground dulu sebelum tap
+                    run_root(f"am start -n {pkg}/com.roblox.client.ActivityProtocolLaunch 2>/dev/null; true")
+                    time.sleep(0.3)
+
+                    # Tap di beberapa posisi layar (splash bisa di mana saja)
+                    for tap_y in [cy, int(sh * 0.7), int(sh * 0.85), int(sh * 0.5)]:
+                        run_root(f"input tap {cx} {tap_y}")
+                        time.sleep(0.1)
+
+                    # Swipe juga (kadang splash butuh swipe)
+                    if a["loading_count"] % 5 == 0:
+                        run_root(f"input swipe {cx} {int(sh*0.7)} {cx} {int(sh*0.3)} 300")
+
+                    a["status"] = f"Tapping splash [{activity or 'loading'}] ({a['loading_count']})"
                 else:
                     a["status"] = f"Loading [{activity or '?'}] ({a['loading_count']})"
 
-                if a["loading_count"] > 20:
-                    do_rejoin(f"Tidak in-game ({activity or method})")
+                # Threshold jauh lebih tinggi — Fisch bisa loading 60-90 detik
+                # 60 × 2 detik = 120 detik max tunggu
+                if a["loading_count"] > 60:
+                    do_rejoin(f"Loading timeout ({activity or method})")
                     a["loading_count"] = 0
             else:
                 a["loading_count"] = 0
@@ -915,7 +947,7 @@ def watch_package(a, cfg, accounts, sw, sh, tot, wh_url,
         except Exception as e:
             log(f"{pkg}: Error di watch_thread: {e}", "WARN")
 
-        time.sleep(3)  # Cek tiap 3 detik per package
+        time.sleep(2)  # Cek tiap 2 detik
 
 def menu_start_rejoin():
     if not check_root():
@@ -1051,7 +1083,7 @@ def menu_start_rejoin():
         if i_t < len(accounts) - 1:
             time.sleep(2)
 
-    # ── Main loop — hanya untuk UI + webhook ───────────────
+    # ── Main loop — UI + webhook + baca command dari bot ───
     try:
         while True:
             nxt_wh = ""
@@ -1065,6 +1097,21 @@ def menu_start_rejoin():
 
             draw_ui(accounts, "Monitoring", f"{tot} pkg aktif", nxt_wh)
 
+            # Baca perintah dari bot (file-based command)
+            try:
+                if os.path.exists(CMD_FILE):
+                    with open(CMD_FILE) as f:
+                        cmd = f.read().strip()
+                    os.remove(CMD_FILE)
+                    if cmd == "stop":
+                        raise KeyboardInterrupt
+                    elif cmd == "start":
+                        pass  # sudah jalan, ignore
+            except KeyboardInterrupt:
+                raise
+            except:
+                pass
+
             # Simpan status
             try:
                 with open(STATUS_FILE, "w") as f:
@@ -1073,7 +1120,7 @@ def menu_start_rejoin():
             except:
                 pass
 
-            # Cek tombol q untuk berhenti
+            # Cek tombol q
             try:
                 import select
                 tty_q = _open_tty()
@@ -1099,6 +1146,10 @@ def menu_start_rejoin():
 
     except KeyboardInterrupt:
         stop_event.set()
+        # Hapus cmd file kalau ada
+        try:
+            if os.path.exists(CMD_FILE): os.remove(CMD_FILE)
+        except: pass
         print(f"\n{YE}[!] Menghentikan semua thread...{R}")
         for t in threads:
             t.join(timeout=3)
@@ -1294,44 +1345,54 @@ def menu_clear_config():
 # ==========================================================
 def menu_list_config():
     cfg = load_cfg()
-    W   = get_term_width()
+    W   = min(get_term_width(), 44)  # Max 44 char supaya tidak wrap
     sep = "=" * W
     sep2= "-" * W
+    MAX = W - 14  # Max panjang value
 
     def yn(key, default=True):
-        val = cfg.get(key, default)
-        return f"{GR}ON{R}" if val else f"{RE}OFF{R}"
+        return f"{GR}ON {R}" if cfg.get(key, default) else f"{RE}OFF{R}"
 
-    print(f"\n{CY}{sep}{R}")
-    print(f"{CY}  LIST CONFIG{R}")
+    def trunc(s, n=None):
+        n = n or MAX
+        s = str(s)
+        return s[:n] + ".." if len(s) > n else s
+
+    clear()
+    print(f"{CY}{sep}{R}")
+    print(f"{CY} LIST CONFIG{R}")
     print(f"{CY}{sep}{R}")
 
     pkgs = cfg.get("packages", [])
-    print(f"{YE}Packages: {len(pkgs)}{R}")
+    print(f"{YE} Packages: {len(pkgs)}{R}")
     print(f"{CY}{sep2}{R}")
     for p in pkgs:
-        ps      = cfg.get("ps_links", {}).get(p, "(belum diset)")
-        running = is_running(p)
-        st      = f"{GR}Running{R}" if running else f"{RE}Mati{R}"
-        print(f"  {GR}>{R} {p}")
-        print(f"    Status : {st}")
-        print(f"    PS     : {ps[:55]}")
+        ps   = cfg.get("ps_links", {}).get(p, "(belum diset)")
+        st   = f"{GR}Running{R}" if is_running(p) else f"{RE}Mati{R}"
+        pname = p.replace("com.roblox.", "rb.")
+        print(f" {GR}>{R} {pname}")
+        print(f"   St: {st}")
+        print(f"   PS: {trunc(ps, MAX)}")
     print(f"{CY}{sep2}{R}")
-    print(f"{YE}Global PS  :{R} {cfg.get('global_ps_link','(kosong)')[:55]}")
-    print(f"{YE}Interval   :{R} {cfg.get('check_interval', 35)}s")
-    print(f"{YE}Delay      :{R} {cfg.get('restart_delay', 10)}s")
-    print(f"{YE}Floating   :{R} {yn('floating_window')}")
-    print(f"{YE}Auto Mute  :{R} {yn('auto_mute')}")
-    print(f"{YE}Low Grafik :{R} {yn('auto_low_graphics')}")
-    print(f"{YE}Auto Tap   :{R} {yn('auto_tap_splash')}")
-    print(f"{YE}AE Delay   :{R} {cfg.get('autoexec_delay', 30)}s")
+    gps = cfg.get('global_ps_link','(kosong)')
+    print(f" {YE}Global PS  :{R} {trunc(gps)}")
+    print(f" {YE}Interval   :{R} {cfg.get('check_interval', 35)}s")
+    print(f" {YE}Delay      :{R} {cfg.get('restart_delay', 10)}s")
+    print(f" {YE}Floating   :{R} {yn('floating_window')}")
+    print(f" {YE}Auto Mute  :{R} {yn('auto_mute')}")
+    print(f" {YE}Low Grafik :{R} {yn('auto_low_graphics')}")
+    print(f" {YE}Auto Tap   :{R} {yn('auto_tap_splash')}")
+    print(f" {YE}AE Delay   :{R} {cfg.get('autoexec_delay', 30)}s")
     ae = cfg.get('autoexec_script', '')
-    print(f"{YE}AutoExec   :{R} {'Ada (' + str(len(ae)) + ' chars)' if ae else '(kosong)'}")
+    print(f" {YE}AutoExec   :{R} {'Ada' if ae else '(kosong)'}")
     wh = cfg.get('webhook_url', '')
-    print(f"{YE}Webhook    :{R} {'Ada' if wh else '(kosong)'}")
+    print(f" {YE}Webhook    :{R} {'Ada' if wh else '(kosong)'}")
     print(f"{CY}{sep}{R}")
     sys.stdout.flush()
-    input(f"\n{GY}  Tekan Enter untuk kembali ke menu: {R}")
+    try:
+        sys.stdin.readline()  # Tunggu Enter
+    except:
+        time.sleep(3)
 
 # ==========================================================
 #  MENU 7 — SETUP WEBHOOK
@@ -1814,7 +1875,25 @@ def main():
     }
 
     while True:
-        reset_terminal()  # Reset state terminal setiap kali balik ke menu
+        # Cek perintah dari bot dulu
+        try:
+            if os.path.exists(CMD_FILE):
+                with open(CMD_FILE) as f:
+                    bot_cmd = f.read().strip()
+                os.remove(CMD_FILE)
+                if bot_cmd == "start":
+                    # Bot minta jalankan rejoin (menu 1)
+                    log("Bot CMD: start rejoin", "INFO")
+                    clear()
+                    menu_start_rejoin()
+                    continue
+                elif bot_cmd == "stop":
+                    log("Bot CMD: stop", "INFO")
+                    break
+        except:
+            pass
+
+        reset_terminal()
         print_banner()
         print(f"{GY}  Tip: 231 = urut Menu2,Menu3,Menu1{R}\n")
         c = inp(f"  {YE}Enter choice: {R}")
