@@ -48,10 +48,10 @@ def reset_terminal():
     """Reset terminal state supaya tidak rusak setelah keluar submenu."""
     try:
         os.system("stty sane 2>/dev/null")
+        os.system("stty cols 80 rows 40 2>/dev/null || true")
     except:
         pass
-    # Reset semua escape sequence
-    sys.stdout.write("\033[0m\033[?7h")
+    sys.stdout.write("\033[0m\033[?7h\033[r\033[H")
     sys.stdout.flush()
 
 def clear():
@@ -426,8 +426,9 @@ def check_cpu_activity(pkg):
 
 def is_in_game(pkg):
     """
-    Sistem deteksi utama dengan fallback otomatis.
-    Otomatis pilih metode terbaik yang work di HP ini.
+    Deteksi in-game dengan kombinasi Activity + Network.
+    Fix: Saat disconnect/AFK, Activity masih GameActivity
+    tapi network = 0 → trigger rejoin.
     Return: (in_game: bool, activity: str, method: str)
     """
     global _detection_method
@@ -436,47 +437,38 @@ def is_in_game(pkg):
     if not is_running(pkg):
         return False, None, "pidof"
 
-    current_method = _detection_method.get(pkg, "auto")
-
-    # -- LEVEL 1: Activity check ------------------------
-    if current_method in ("auto", "activity"):
-        works, ingame, activity = check_activity(pkg)
-        if works:
-            _detection_method[pkg] = "activity"
-            log(f"{pkg}: Metode=activity | Activity={activity} | InGame={ingame}", "DEBUG")
-            return ingame, activity, "activity"
+    # -- LEVEL 1: Activity + Network kombinasi ------------
+    works_act, ingame, activity = check_activity(pkg)
+    if works_act:
+        _detection_method[pkg] = "activity"
+        if ingame:
+            # Kelihatan in-game, tapi validasi network
+            # Kalau GameActivity tapi koneksi 0 = disconnect/AFK kick
+            works_net, connected = check_network(pkg)
+            if works_net and not connected:
+                log(f"{pkg}: GameActivity tapi koneksi mati → Disconnect/AFK!", "WARN")
+                return False, activity, "activity+network"
+            # In-game dan koneksi OK
+            return True, activity, "activity"
         else:
-            if current_method == "activity":
-                # Metode ini tiba-tiba tidak work → reset ke auto
-                _detection_method[pkg] = "auto"
-            log(f"{pkg}: dumpsys activity tidak work → coba network", "WARN")
+            # Tidak in-game (loading/menu Roblox)
+            return False, activity, "activity"
 
-    # -- LEVEL 2: Network check -------------------------
-    if current_method in ("auto", "network"):
-        works, connected = check_network(pkg)
-        if works:
-            _detection_method[pkg] = "network"
-            log(f"{pkg}: Metode=network | Connected={connected}", "DEBUG")
-            return connected, "network-check", "network"
-        else:
-            if current_method == "network":
-                _detection_method[pkg] = "auto"
-            log(f"{pkg}: network check tidak work → coba CPU", "WARN")
+    # -- LEVEL 2: Network only (fallback) -----------------
+    works_net, connected = check_network(pkg)
+    if works_net:
+        _detection_method[pkg] = "network"
+        return connected, "network-check", "network"
 
-    # -- LEVEL 3: CPU activity check --------------------
-    if current_method in ("auto", "cpu"):
-        works, active = check_cpu_activity(pkg)
-        if works:
-            _detection_method[pkg] = "cpu"
-            log(f"{pkg}: Metode=cpu | Active={active}", "DEBUG")
-            return active, "cpu-check", "cpu"
-        else:
-            log(f"{pkg}: CPU check tidak work → fallback pidof", "WARN")
+    # -- LEVEL 3: CPU -------------------------------------
+    works_cpu, active = check_cpu_activity(pkg)
+    if works_cpu:
+        _detection_method[pkg] = "cpu"
+        return active, "cpu-check", "cpu"
 
-    # -- LEVEL 4: Fallback — pidof saja -----------------
+    # -- LEVEL 4: Pidof fallback --------------------------
     _detection_method[pkg] = "pidof"
     running = is_running(pkg)
-    log(f"{pkg}: Metode=pidof (fallback) | Running={running}", "DEBUG")
     return running, "pidof-only", "pidof"
 
 # ==========================================================
@@ -801,6 +793,21 @@ def watch_package(a, cfg, accounts, sw, sh, tot, wh_url,
 
     # Hitung posisi tap sesuai grid bounds package ini
     def get_tap_pos():
+        """Deteksi posisi window Roblox aktual via dumpsys."""
+        # Coba deteksi posisi window aktual dari dumpsys
+        ok, out = run_root(f"dumpsys window windows 2>/dev/null | grep -A5 '{pkg}' | grep 'Frame:'")
+        if ok and out.strip():
+            # Frame: [x1,y1][x2,y2]
+            import re
+            m = re.search(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', out)
+            if m:
+                x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+                if x2 > x1 and y2 > y1:
+                    cx = (x1 + x2) // 2
+                    cy = (y1 + y2) // 2
+                    return cx, cy
+
+        # Fallback ke grid_bounds kalau floating
         if do_float and tot > 1:
             bounds_str = grid_bounds(a["index"], tot, sw, sh)
             try:
@@ -808,25 +815,30 @@ def watch_package(a, cfg, accounts, sw, sh, tot, wh_url,
                 return (x1 + x2) // 2, (y1 + y2) // 2
             except:
                 pass
+        # Default tengah layar
         return sw // 2, sh // 2
 
     def do_rejoin(reason):
         """Rejoin package ini."""
         a["rejoin_count"] = a.get("rejoin_count", 0) + 1
         log(f"{pkg}: {reason} → Rejoin #{a['rejoin_count']}", "WARN")
-        a["status"] = f"⚠️ {reason}"
+        a["status"] = f"Disconnect: {reason}"
 
         if wh_url:
             _send_webhook_nocookie(wh_url, accounts,
-                                   f"⚠️ Disconnect: {pkg}", 15158332)
+                                   f"Disconnect: {pkg}", 15158332)
 
-        # Force stop → clear cache → launch
-        a["status"] = "Force stop..."
-        run_root(f"am force-stop {pkg}")
+        # Kill HANYA proses package ini (bukan am force-stop yang matikan semua!)
+        a["status"] = "Kill process..."
+        ok, pid = run_root(f"pidof '{pkg}'")
+        if ok and pid.strip():
+            for p in pid.strip().split():
+                run_root(f"kill -9 {p} 2>/dev/null")
         time.sleep(2)
 
         a["status"] = "Clear cache..."
         clear_cache_safe(pkg)
+        time.sleep(1)
 
         a["status"] = "Relaunching..."
         bounds = grid_bounds(a["index"], tot, sw, sh) if do_float else None
@@ -1345,16 +1357,15 @@ def menu_clear_config():
 # ==========================================================
 def menu_list_config():
     cfg = load_cfg()
-    W   = min(get_term_width(), 44)  # Max 44 char supaya tidak wrap
+    W   = min(get_term_width(), 42)
     sep = "=" * W
     sep2= "-" * W
-    MAX = W - 14  # Max panjang value
+    MAX = 25
 
     def yn(key, default=True):
         return f"{GR}ON {R}" if cfg.get(key, default) else f"{RE}OFF{R}"
 
-    def trunc(s, n=None):
-        n = n or MAX
+    def trunc(s, n=MAX):
         s = str(s)
         return s[:n] + ".." if len(s) > n else s
 
@@ -1364,33 +1375,32 @@ def menu_list_config():
     print(f"{CY}{sep}{R}")
 
     pkgs = cfg.get("packages", [])
-    print(f"{YE} Packages: {len(pkgs)}{R}")
+    print(f"{YE} Packages ({len(pkgs)}):{R}")
     print(f"{CY}{sep2}{R}")
     for p in pkgs:
-        ps   = cfg.get("ps_links", {}).get(p, "(belum diset)")
-        st   = f"{GR}Running{R}" if is_running(p) else f"{RE}Mati{R}"
+        ps    = cfg.get("ps_links", {}).get(p, "(belum diset)")
+        st    = f"{GR}Running{R}" if is_running(p) else f"{RE}Mati{R}"
         pname = p.replace("com.roblox.", "rb.")
         print(f" {GR}>{R} {pname}")
-        print(f"   St: {st}")
-        print(f"   PS: {trunc(ps, MAX)}")
+        print(f"   Status : {st}")
+        print(f"   PS     : {trunc(ps)}")
     print(f"{CY}{sep2}{R}")
-    gps = cfg.get('global_ps_link','(kosong)')
-    print(f" {YE}Global PS  :{R} {trunc(gps)}")
-    print(f" {YE}Interval   :{R} {cfg.get('check_interval', 35)}s")
-    print(f" {YE}Delay      :{R} {cfg.get('restart_delay', 10)}s")
-    print(f" {YE}Floating   :{R} {yn('floating_window')}")
-    print(f" {YE}Auto Mute  :{R} {yn('auto_mute')}")
-    print(f" {YE}Low Grafik :{R} {yn('auto_low_graphics')}")
-    print(f" {YE}Auto Tap   :{R} {yn('auto_tap_splash')}")
-    print(f" {YE}AE Delay   :{R} {cfg.get('autoexec_delay', 30)}s")
-    ae = cfg.get('autoexec_script', '')
-    print(f" {YE}AutoExec   :{R} {'Ada' if ae else '(kosong)'}")
-    wh = cfg.get('webhook_url', '')
-    print(f" {YE}Webhook    :{R} {'Ada' if wh else '(kosong)'}")
+    print(f" {YE}Interval :{R} {cfg.get('check_interval',35)}s")
+    print(f" {YE}Delay    :{R} {cfg.get('restart_delay',10)}s")
+    print(f" {YE}Floating :{R} {yn('floating_window')}")
+    print(f" {YE}Mute     :{R} {yn('auto_mute')}")
+    print(f" {YE}LowGfx   :{R} {yn('auto_low_graphics')}")
+    print(f" {YE}AutoTap  :{R} {yn('auto_tap_splash')}")
+    print(f" {YE}AE Delay :{R} {cfg.get('autoexec_delay',30)}s")
+    ae = cfg.get('autoexec_script','')
+    wh = cfg.get('webhook_url','')
+    print(f" {YE}AutoExec :{R} {'Ada' if ae else 'Kosong'}")
+    print(f" {YE}Webhook  :{R} {'Ada' if wh else 'Kosong'}")
     print(f"{CY}{sep}{R}")
+    print(f"\n{GY} [Enter] kembali ke menu{R}")
     sys.stdout.flush()
     try:
-        sys.stdin.readline()  # Tunggu Enter
+        input()
     except:
         time.sleep(3)
 
