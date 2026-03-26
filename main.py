@@ -18,6 +18,22 @@
 
 import os, sys, json, subprocess, time, math, re, argparse
 
+# Import smart tap helper
+try:
+    import tap_helper as _tap_helper
+    _SMART_TAP = True
+except ImportError:
+    _SMART_TAP = False
+
+def _tap_helper_fallback(pkg, x1, y1, x2, y2):
+    """Fallback tap tanpa tap_helper."""
+    cx = (x1 + x2) // 2
+    run_root(f"am start -a android.intent.action.MAIN -n {pkg}/com.roblox.client.ActivityProtocolLaunch 2>/dev/null; true")
+    time.sleep(0.2)
+    for ty in [(y1+y2)//2, y1+int((y2-y1)*0.70), y1+int((y2-y1)*0.85)]:
+        run_root(f"input tap {cx} {ty}")
+        time.sleep(0.08)
+
 # --- ARGS --------------------------------------------------
 parser = argparse.ArgumentParser()
 parser.add_argument("--auto",      action="store_true")
@@ -101,21 +117,10 @@ def wait_enter(msg="  Tekan Enter untuk kembali ke menu"):
         time.sleep(3)
 
 def inp(prompt, max_chars=2, timeout=60):
-    """Input menu — flush stdin dulu."""
+    """Input menu — flush stdin dulu, lalu baca via input()."""
     flush_stdin()
     try:
         return input(prompt).strip()
-    except EOFError:
-        return ""
-    except KeyboardInterrupt:
-        raise
-    """Input menu — flush dulu, lalu baca."""
-    flush_stdin()
-    sys.stdout.write(prompt)
-    sys.stdout.flush()
-    try:
-        line = sys.stdin.readline()
-        return line.strip() if line else ""
     except EOFError:
         return ""
     except KeyboardInterrupt:
@@ -143,30 +148,7 @@ def pause_auto(detik=5):
     sys.stdout.write("\r" + " "*40 + "\r\n")
     sys.stdout.flush()
 
-def countdown_before_menu(label, detik=10):
-    """
-    Countdown sebelum masuk menu.
-    Tekan Enter → langsung masuk.
-    Otomatis masuk setelah 10 detik.
-    """
-    import select
-    flush_stdin()
-    print(f"\n  \033[90m>> \033[97m{label}\033[0m")
-    print(f"  \033[90m[Enter = langsung masuk | tunggu {detik}s otomatis]\033[0m")
-    for i in range(detik, 0, -1):
-        sys.stdout.write(f"\r  \033[90mMasuk dalam {i}s...\033[0m   ")
-        sys.stdout.flush()
-        # Cek input non-blocking
-        try:
-            ready, _, _ = select.select([sys.stdin], [], [], 1)
-            if ready:
-                sys.stdin.readline()  # buang input
-                break
-        except:
-            time.sleep(1)
-    sys.stdout.write("\r" + " "*50 + "\r\n")
-    sys.stdout.flush()
-    return True
+
 
 def get_memory():
     try:
@@ -264,32 +246,29 @@ def find_installed_pkgs():
 
 def is_running(pkg):
     """
-    Cek apakah package Roblox sedang running.
-    Kalau salah satu metode bilang RUNNING → return True.
-    Kalau SEMUA metode bilang mati → return False.
+    Cek apakah package Roblox sedang BENAR-BENAR running.
+    Delta Lite dan executor lain kadang meninggalkan ghost process
+    di dumpsys meski sudah di-force close.
+    Prioritaskan pidof + /proc/cmdline sebagai sumber kebenaran.
     """
-    # Metode 1: pidof — paling cepat dan akurat
+    # Metode 1: pidof — paling akurat, tidak bisa ditipu ghost
     ok, out = run_root(f"pidof '{pkg}' 2>/dev/null")
+    if ok and out.strip():
+        # Validasi: pastikan /proc/{pid} benar-benar ada dan punya cmdline
+        first_pid = out.strip().split()[0]
+        ok2, cmdline = run_root(f"cat /proc/{first_pid}/cmdline 2>/dev/null | tr '\\0' ' '")
+        if ok2 and pkg in (cmdline or ""):
+            return True
+        # pidof ada tapi /proc tidak ada = zombie/ghost, anggap mati
+        return False
+
+    # Metode 2: /proc scan — cari cmdline yang mengandung package name
+    ok, out = run_root(f"grep -rl '{pkg}' /proc/*/cmdline 2>/dev/null | head -1")
     if ok and out.strip():
         return True
 
-    # Metode 2: ps -ef
+    # Metode 3: ps -ef (fallback)
     ok, out = run_root(f"ps -ef 2>/dev/null | grep '{pkg}' | grep -v grep")
-    if ok and pkg in (out or ""):
-        return True
-
-    # Metode 3: dumpsys activity processes — paling reliable Android 10+
-    ok, out = run_root(f"dumpsys activity processes 2>/dev/null | grep '{pkg}'")
-    if ok and pkg in (out or ""):
-        return True
-
-    # Metode 4: cmd activity list-tasks
-    ok, out = run_root(f"cmd activity list-tasks 2>/dev/null | grep '{pkg}'")
-    if ok and pkg in (out or ""):
-        return True
-
-    # Metode 5: /proc scan — paling reliable untuk force close
-    ok, out = run_root(f"grep -r '{pkg}' /proc/*/cmdline 2>/dev/null | head -1")
     if ok and pkg in (out or ""):
         return True
 
@@ -622,23 +601,6 @@ def launch_game(ps_link, pkg, bounds=None):
 #  BANNER MENU
 # ==========================================================
 MENU_ITEMS = [
-    ("1",  "Start Auto Rejoin"),
-    ("2",  "Detect & Set Packages Roblox"),
-    ("3",  "Set PS Link / Game ID (Semua Package)"),
-    ("4",  "Set PS Link per Package (Berbeda-beda)"),
-    ("5",  "Clear Config"),
-    ("6",  "List Config"),
-    ("7",  "Setup Webhook Discord"),
-    ("8",  "Set Interval Cek"),
-    ("9",  "Toggle Floating Window"),
-    ("10", "Toggle Auto Mute"),
-    ("11", "Toggle Low Grafik"),
-    ("12", "Diagnostic (Test Deteksi HP ini)"),
-    ("13", "Lihat Log Aktivitas"),
-    ("14", "Exit"),
-]
-
-MENU_ITEMS = [
     ( "1",  "Start Auto Rejoin"),
     ( "2",  "Detect Packages Roblox"),
     ( "3",  "Set PS Link (Semua)"),
@@ -792,31 +754,42 @@ def watch_package(a, cfg, accounts, sw, sh, tot, wh_url,
     tap_interval = cfg.get("tap_interval", 3)
 
     # Hitung posisi tap sesuai grid bounds package ini
-    def get_tap_pos():
-        """Deteksi posisi window Roblox aktual via dumpsys."""
-        # Coba deteksi posisi window aktual dari dumpsys
-        ok, out = run_root(f"dumpsys window windows 2>/dev/null | grep -A5 '{pkg}' | grep 'Frame:'")
+    def get_win_bounds():
+        """
+        Deteksi bounds window Roblox aktual via dumpsys.
+        Return (x1, y1, x2, y2) atau fallback ke grid/fullscreen.
+        """
+        ok, out = run_root(
+            f"dumpsys window windows 2>/dev/null | grep -A10 '{pkg}' | grep 'Frame:'"
+        )
         if ok and out.strip():
-            # Frame: [x1,y1][x2,y2]
-            import re
             m = re.search(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', out)
             if m:
-                x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+                x1, y1 = int(m.group(1)), int(m.group(2))
+                x2, y2 = int(m.group(3)), int(m.group(4))
                 if x2 > x1 and y2 > y1:
-                    cx = (x1 + x2) // 2
-                    cy = (y1 + y2) // 2
-                    return cx, cy
-
-        # Fallback ke grid_bounds kalau floating
+                    return x1, y1, x2, y2
+        # Fallback ke grid
         if do_float and tot > 1:
             bounds_str = grid_bounds(a["index"], tot, sw, sh)
             try:
                 x1, y1, x2, y2 = map(int, bounds_str.split(","))
-                return (x1 + x2) // 2, (y1 + y2) // 2
+                return x1, y1, x2, y2
             except:
                 pass
-        # Default tengah layar
-        return sw // 2, sh // 2
+        return 0, 0, sw, sh
+
+    def do_smart_tap(label=""):
+        """Tap tengah window Roblox. Bawa ke foreground dulu."""
+        x1, y1, x2, y2 = get_win_bounds()
+        if _SMART_TAP:
+            tx, ty, reason = _tap_helper.smart_tap(pkg, x1, y1, x2, y2)
+        else:
+            # Fallback tanpa tap_helper
+            _tap_helper_fallback(pkg, x1, y1, x2, y2)
+            tx, ty, reason = (x1+x2)//2, (y1+y2)//2, "manual"
+        a["status"] = f"Tap[{reason}] ({label})"
+        return tx, ty, reason
 
     def do_rejoin(reason):
         """Rejoin package ini."""
@@ -850,16 +823,14 @@ def watch_package(a, cfg, accounts, sw, sh, tot, wh_url,
         protect_app(pkg)
 
         # Auto tap + inject autoexec sampai in-game
-        cx, cy      = get_tap_pos()
-        injected_ae = False
-        game_entered= False
-        total_wait  = max(ae_delay + 10, 40)
+        injected_ae  = False
+        game_entered = False
+        total_wait   = max(ae_delay + 10, 40)
 
         for t in range(total_wait, 0, -1):
             if stop_event.is_set():
                 return
 
-            # Detect activity
             activity   = get_current_activity(pkg)
             ingame_now = False
             if activity:
@@ -872,26 +843,17 @@ def watch_package(a, cfg, accounts, sw, sh, tot, wh_url,
                 game_entered = True
                 a["status"]  = f"In-game! {activity}"
                 log(f"{pkg}: Game loaded, activity={activity}", "INFO")
-                # Inject autoexec langsung
                 if ae_script and not injected_ae:
                     a["status"] = "Inject autoexec..."
                     inject_autoexec(pkg, ae_script)
                     injected_ae = True
                 break
 
-            # Auto tap selama loading — tiap detik, semua posisi
+            # Smart tap selama loading
             if auto_tap and not game_entered:
-                # Bawa ke foreground
-                run_root(f"am start -n {pkg}/com.roblox.client.ActivityProtocolLaunch 2>/dev/null; true")
-                time.sleep(0.2)
-                # Tap banyak posisi
-                for tap_y in [cy, int(sh * 0.85), int(sh * 0.7), int(sh * 0.5)]:
-                    run_root(f"input tap {cx} {tap_y}")
-                    time.sleep(0.05)
                 act_str = activity or "loading"
-                a["status"] = f"Tapping [{act_str}] {t}s"
+                do_smart_tap(f"{act_str} {t}s")
 
-            # Fallback inject kalau lewat ae_delay
             if not injected_ae and t <= ae_delay and ae_script:
                 a["status"] = "Inject autoexec..."
                 inject_autoexec(pkg, ae_script)
@@ -920,27 +882,16 @@ def watch_package(a, cfg, accounts, sw, sh, tot, wh_url,
                 a["loading_count"] = a.get("loading_count", 0) + 1
 
                 if auto_tap:
-                    cx, cy = get_tap_pos()
-
-                    # Bawa Roblox ke foreground dulu sebelum tap
-                    run_root(f"am start -n {pkg}/com.roblox.client.ActivityProtocolLaunch 2>/dev/null; true")
-                    time.sleep(0.3)
-
-                    # Tap di beberapa posisi layar (splash bisa di mana saja)
-                    for tap_y in [cy, int(sh * 0.7), int(sh * 0.85), int(sh * 0.5)]:
-                        run_root(f"input tap {cx} {tap_y}")
-                        time.sleep(0.1)
-
-                    # Swipe juga (kadang splash butuh swipe)
+                    act_str = activity or "loading"
+                    do_smart_tap(f"{act_str} {a['loading_count']}")
+                    # Swipe tiap 5 siklus sebagai backup
                     if a["loading_count"] % 5 == 0:
-                        run_root(f"input swipe {cx} {int(sh*0.7)} {cx} {int(sh*0.3)} 300")
-
-                    a["status"] = f"Tapping splash [{activity or 'loading'}] ({a['loading_count']})"
+                        x1, y1, x2, y2 = get_win_bounds()
+                        cx = (x1 + x2) // 2
+                        run_root(f"input swipe {cx} {y1+int((y2-y1)*0.7)} {cx} {y1+int((y2-y1)*0.3)} 300")
                 else:
                     a["status"] = f"Loading [{activity or '?'}] ({a['loading_count']})"
 
-                # Threshold jauh lebih tinggi — Fisch bisa loading 60-90 detik
-                # 60 × 2 detik = 120 detik max tunggu
                 if a["loading_count"] > 60:
                     do_rejoin(f"Loading timeout ({activity or method})")
                     a["loading_count"] = 0
@@ -1356,53 +1307,53 @@ def menu_clear_config():
 #  MENU 6 — LIST CONFIG
 # ==========================================================
 def menu_list_config():
-    cfg = load_cfg()
-    W   = min(get_term_width(), 42)
-    sep = "=" * W
-    sep2= "-" * W
-    MAX = 25
+    cfg  = load_cfg()
+    pkgs = cfg.get("packages", [])
 
     def yn(key, default=True):
-        return f"{GR}ON {R}" if cfg.get(key, default) else f"{RE}OFF{R}"
+        return f"{GR}ON{R}" if cfg.get(key, default) else f"{RE}OFF{R}"
 
-    def trunc(s, n=MAX):
+    def trunc(s, n=38):
         s = str(s)
         return s[:n] + ".." if len(s) > n else s
 
     clear()
+    W   = max(30, get_term_width() - 1)
+    sep = "=" * W
+    sep2= "-" * W
+
     print(f"{CY}{sep}{R}")
-    print(f"{CY} LIST CONFIG{R}")
+    print(f"{CY} LIST CONFIG — YURXZ Rejoin v9{R}")
     print(f"{CY}{sep}{R}")
 
-    pkgs = cfg.get("packages", [])
-    print(f"{YE} Packages ({len(pkgs)}):{R}")
+    print(f"\n{YE} PACKAGES ({len(pkgs)}){R}")
     print(f"{CY}{sep2}{R}")
     for p in pkgs:
-        ps    = cfg.get("ps_links", {}).get(p, "(belum diset)")
+        ps    = cfg.get("ps_links", {}).get(p) or cfg.get("global_ps_link", "(belum diset)")
         st    = f"{GR}Running{R}" if is_running(p) else f"{RE}Mati{R}"
         pname = p.replace("com.roblox.", "rb.")
-        print(f" {GR}>{R} {pname}")
-        print(f"   Status : {st}")
-        print(f"   PS     : {trunc(ps)}")
+        print(f" {GR}>{R} {WH}{pname}{R}  [{st}]")
+        print(f"   {GY}PS : {trunc(ps)}{R}")
+    if not pkgs:
+        print(f"  {GY}(belum ada package){R}")
+
+    print(f"\n{CY}{sep2}{R}")
+    print(f"{YE} SETTINGS{R}")
     print(f"{CY}{sep2}{R}")
-    print(f" {YE}Interval :{R} {cfg.get('check_interval',35)}s")
-    print(f" {YE}Delay    :{R} {cfg.get('restart_delay',10)}s")
-    print(f" {YE}Floating :{R} {yn('floating_window')}")
-    print(f" {YE}Mute     :{R} {yn('auto_mute')}")
-    print(f" {YE}LowGfx   :{R} {yn('auto_low_graphics')}")
-    print(f" {YE}AutoTap  :{R} {yn('auto_tap_splash')}")
-    print(f" {YE}AE Delay :{R} {cfg.get('autoexec_delay',30)}s")
-    ae = cfg.get('autoexec_script','')
-    wh = cfg.get('webhook_url','')
-    print(f" {YE}AutoExec :{R} {'Ada' if ae else 'Kosong'}")
-    print(f" {YE}Webhook  :{R} {'Ada' if wh else 'Kosong'}")
+    print(f" {YE}Interval    :{R} {cfg.get('check_interval', 35)}s")
+    print(f" {YE}Delay       :{R} {cfg.get('restart_delay', 10)}s")
+    print(f" {YE}Floating    :{R} {yn('floating_window')}")
+    print(f" {YE}Mute        :{R} {yn('auto_mute')}")
+    print(f" {YE}LowGfx      :{R} {yn('auto_low_graphics')}")
+    print(f" {YE}AutoTap     :{R} {yn('auto_tap_splash')}")
+    print(f" {YE}AE Delay    :{R} {cfg.get('autoexec_delay', 30)}s")
+    ae = cfg.get('autoexec_script', '')
+    wh = cfg.get('webhook_url', '')
+    print(f" {YE}AutoExec    :{R} {'Ada' if ae else 'Kosong'}")
+    print(f" {YE}Webhook     :{R} {'Ada' if wh else 'Kosong'}")
     print(f"{CY}{sep}{R}")
-    print(f"\n{GY} [Enter] kembali ke menu{R}")
-    sys.stdout.flush()
-    try:
-        input()
-    except:
-        time.sleep(3)
+
+    wait_enter()
 
 # ==========================================================
 #  MENU 7 — SETUP WEBHOOK
@@ -1776,32 +1727,6 @@ def menu_diagnostic():
 # ==========================================================
 #  MAIN
 # ==========================================================
-def main():
-    if ARGS.auto:
-        if not check_root():
-            print(f"{RE}Root required!{R}"); sys.exit(1)
-        log("Start dengan --auto","INFO")
-        menu_start_rejoin()
-        return
-
-    MENU_FN = {
-        "1":  menu_start_rejoin,
-        "2":  menu_detect_packages,
-        "3":  menu_set_global_ps,
-        "4":  menu_set_per_pkg_ps,
-        "5":  menu_clear_config,
-        "6":  menu_list_config,
-        "7":  menu_setup_webhook,
-        "8":  menu_set_interval,
-        "9":  lambda: menu_toggle("floating_window", "Floating Window"),
-        "10": lambda: menu_toggle("auto_mute", "Auto Mute"),
-        "11": lambda: menu_toggle("auto_low_graphics", "Low Grafik"),
-        "12": lambda: menu_toggle("auto_tap_splash", "Auto Tap Splash"),
-        "13": menu_autoexec,
-        "14": menu_diagnostic,
-        "15": menu_lihat_log,
-    }
-
 def countdown_before_menu(label, detik=10):
     """
     Countdown sebelum masuk menu.
@@ -1850,7 +1775,7 @@ def parse_sequence(c):
         while i < len(c):
             if c[i] == '1' and i+1 < len(c) and c[i+1] in '0123456789':
                 two = c[i:i+2]
-                if two in ['10','11','12','13','14']:
+                if two in ['10','11','12','13','14','15','16']:
                     parts.append(two); i += 2
                     continue
             parts.append(c[i]); i += 1
@@ -1884,38 +1809,86 @@ def main():
         "15": menu_lihat_log,
     }
 
+    import threading as _threading
+
+    # Flag komunikasi antara watcher thread dan main loop
+    _bot_cmd_flag = {"cmd": None}
+    _exit_flag    = {"exit": False}
+
+    def _cmd_watcher():
+        """Thread background: poll CMD_FILE tiap 0.5 detik.
+        Tidak terblokir oleh inp() di main loop."""
+        while not _exit_flag["exit"]:
+            try:
+                if os.path.exists(CMD_FILE):
+                    with open(CMD_FILE) as f:
+                        cmd = f.read().strip()
+                    os.remove(CMD_FILE)
+                    if cmd in ("start", "stop"):
+                        _bot_cmd_flag["cmd"] = cmd
+                        log(f"Bot CMD diterima: {cmd}", "INFO")
+                        # Interrupt inp() dengan mengirim newline ke stdin
+                        try:
+                            import subprocess as _sp
+                            _sp.run(["su", "-c",
+                                     f"echo '' >> /proc/{os.getpid()}/fd/0 2>/dev/null; true"],
+                                    capture_output=True, timeout=2)
+                        except:
+                            pass
+            except:
+                pass
+            time.sleep(0.5)
+
+    watcher_t = _threading.Thread(target=_cmd_watcher, daemon=True)
+    watcher_t.start()
+
     while True:
-        # Cek perintah dari bot dulu
-        try:
-            if os.path.exists(CMD_FILE):
-                with open(CMD_FILE) as f:
-                    bot_cmd = f.read().strip()
-                os.remove(CMD_FILE)
-                if bot_cmd == "start":
-                    # Bot minta jalankan rejoin (menu 1)
-                    log("Bot CMD: start rejoin", "INFO")
-                    clear()
-                    menu_start_rejoin()
-                    continue
-                elif bot_cmd == "stop":
-                    log("Bot CMD: stop", "INFO")
-                    break
-        except:
-            pass
+        # Cek flag dari watcher
+        cmd_now = _bot_cmd_flag["cmd"]
+        if cmd_now:
+            _bot_cmd_flag["cmd"] = None
+            if cmd_now == "start":
+                log("Bot CMD: start rejoin", "INFO")
+                clear()
+                menu_start_rejoin()
+                continue
+            elif cmd_now == "stop":
+                log("Bot CMD: stop", "INFO")
+                _exit_flag["exit"] = True
+                break
 
         reset_terminal()
         print_banner()
         print(f"{GY}  Tip: 231 = urut Menu2,Menu3,Menu1{R}\n")
-        c = inp(f"  {YE}Enter choice: {R}")
+
+        # inp() dengan timeout 2 detik supaya watcher flag bisa dicek
+        import select as _select
+        flush_stdin()
+        sys.stdout.write(f"  {YE}Enter choice: {R}")
+        sys.stdout.flush()
+        c = ""
+        try:
+            ready, _, _ = _select.select([sys.stdin], [], [], 2)
+            if ready:
+                c = sys.stdin.readline().strip()
+            else:
+                # Timeout — loop ulang untuk cek bot cmd
+                continue
+        except KeyboardInterrupt:
+            _exit_flag["exit"] = True
+            break
+        except:
+            time.sleep(1)
+            continue
 
         if c.strip() == "16":
+            _exit_flag["exit"] = True
             clear(); print(f"{CY}Sampai jumpa!{R}\n"); break
 
         sequence = parse_sequence(c.strip())
 
-        # Filter yang valid
-        valid   = [s for s in sequence if s in MENU_FN or s == "14"]
-        invalid = [s for s in sequence if s not in MENU_FN and s != "14"]
+        valid   = [s for s in sequence if s in MENU_FN or s == "16"]
+        invalid = [s for s in sequence if s not in MENU_FN and s != "16"]
 
         if not valid:
             print(f"\n  {RE}Tidak valid: {c}{R}")
@@ -1930,7 +1903,8 @@ def main():
         countdown_before_menu(label_str, 10)
 
         for s in valid:
-            if s == "14":
+            if s == "16":
+                _exit_flag["exit"] = True
                 clear(); print(f"{CY}Sampai jumpa!{R}\n"); return
             fn = MENU_FN.get(s)
             if fn:
